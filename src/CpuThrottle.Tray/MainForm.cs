@@ -14,6 +14,10 @@ internal sealed class MainForm : Form
     private readonly NumericUpDown _coresBox = new();
     private readonly CheckBox _efficiencyBox = new();
     private readonly ComboBox _priorityBox = new();
+    private readonly NumericUpDown _diskReadBox = new();
+    private readonly NumericUpDown _diskWriteBox = new();
+    private readonly NumericUpDown _networkTxBox = new();
+    private readonly CheckBox _gpuLowBox = new();
     private readonly Button _browseButton = new();
     private readonly Button _launchButton = new();
     private readonly Button _stopButton = new();
@@ -28,27 +32,27 @@ internal sealed class MainForm : Form
     public MainForm()
     {
         Text = "CpuThrottle";
-        Width = 520;
-        Height = 360;
-        MinimumSize = new Size(480, 320);
+        Width = 560;
+        Height = 480;
+        MinimumSize = new Size(520, 440);
         StartPosition = FormStartPosition.CenterScreen;
         AllowDrop = true;
         Font = new Font("Segoe UI", 9F);
 
         var exeLabel = new Label { Text = "Executable", AutoSize = true, Left = 16, Top = 18 };
-        _exeBox.SetBounds(16, 40, 360, 27);
+        _exeBox.SetBounds(16, 40, 400, 27);
         _exeBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         _browseButton.Text = "Browse…";
-        _browseButton.SetBounds(388, 38, 100, 30);
+        _browseButton.SetBounds(428, 38, 100, 30);
         _browseButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _browseButton.Click += (_, _) => BrowseForExe();
 
         var argsLabel = new Label { Text = "Arguments", AutoSize = true, Left = 16, Top = 78 };
-        _argsBox.SetBounds(16, 100, 472, 27);
+        _argsBox.SetBounds(16, 100, 512, 27);
         _argsBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
         var cpuLabel = new Label { Text = "CPU hard cap", AutoSize = true, Left = 16, Top = 140 };
-        _cpuSlider.SetBounds(16, 162, 400, 45);
+        _cpuSlider.SetBounds(16, 162, 440, 45);
         _cpuSlider.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         _cpuSlider.Minimum = 10;
         _cpuSlider.Maximum = 90;
@@ -56,7 +60,7 @@ internal sealed class MainForm : Form
         _cpuSlider.Value = 50;
         _cpuSlider.ValueChanged += (_, _) => UpdateCpuLabel();
         _cpuValueLabel.AutoSize = true;
-        _cpuValueLabel.Left = 430;
+        _cpuValueLabel.Left = 470;
         _cpuValueLabel.Top = 170;
         _cpuValueLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
 
@@ -78,19 +82,58 @@ internal sealed class MainForm : Form
         _priorityBox.Items.AddRange(new object[] { "Idle", "Below normal", "Normal" });
         _priorityBox.SelectedIndex = 1;
 
+        _gpuLowBox.Text = "GPU low priority (best-effort)";
+        _gpuLowBox.AutoSize = true;
+        _gpuLowBox.Left = 240;
+        _gpuLowBox.Top = 246;
+
+        var diskReadLabel = new Label { Text = "Disk read KB/s (0 = off)", AutoSize = true, Left = 16, Top = 286 };
+        _diskReadBox.SetBounds(170, 282, 90, 27);
+        _diskReadBox.Minimum = 0;
+        _diskReadBox.Maximum = 100_000_000;
+        _diskReadBox.Increment = 1024;
+        _diskReadBox.Value = 0;
+
+        var diskWriteLabel = new Label { Text = "Disk write KB/s (0 = off)", AutoSize = true, Left = 280, Top = 286 };
+        _diskWriteBox.SetBounds(440, 282, 90, 27);
+        _diskWriteBox.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        _diskWriteBox.Minimum = 0;
+        _diskWriteBox.Maximum = 100_000_000;
+        _diskWriteBox.Increment = 1024;
+        _diskWriteBox.Value = 0;
+
+        var networkLabel = new Label { Text = "Network Tx KB/s (0 = off)", AutoSize = true, Left = 16, Top = 322 };
+        _networkTxBox.SetBounds(180, 318, 90, 27);
+        _networkTxBox.Minimum = 0;
+        _networkTxBox.Maximum = 100_000_000;
+        _networkTxBox.Increment = 1024;
+        _networkTxBox.Value = 0;
+
+        var noteLabel = new Label
+        {
+            Text = "Disk read/write share one Job Object MaxBandwidth; network Tx is outbound-only; GPU is a soft hint.",
+            AutoSize = false,
+            Left = 16,
+            Top = 352,
+            Width = 512,
+            Height = 32,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            ForeColor = SystemColors.GrayText,
+        };
+
         _launchButton.Text = "Launch throttled";
-        _launchButton.SetBounds(16, 284, 140, 32);
+        _launchButton.SetBounds(16, 396, 140, 32);
         _launchButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         _launchButton.Click += (_, _) => Launch();
 
         _stopButton.Text = "Stop job";
-        _stopButton.SetBounds(168, 284, 100, 32);
+        _stopButton.SetBounds(168, 396, 100, 32);
         _stopButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         _stopButton.Enabled = false;
         _stopButton.Click += (_, _) => StopJob();
 
         _statusLabel.AutoSize = false;
-        _statusLabel.SetBounds(280, 288, 208, 28);
+        _statusLabel.SetBounds(280, 400, 248, 28);
         _statusLabel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         _statusLabel.Text = "Ready — drop an .exe here or browse.";
 
@@ -100,7 +143,9 @@ internal sealed class MainForm : Form
             argsLabel, _argsBox,
             cpuLabel, _cpuSlider, _cpuValueLabel,
             coresLabel, _coresBox, _efficiencyBox,
-            priorityLabel, _priorityBox,
+            priorityLabel, _priorityBox, _gpuLowBox,
+            diskReadLabel, _diskReadBox, diskWriteLabel, _diskWriteBox,
+            networkLabel, _networkTxBox, noteLabel,
             _launchButton, _stopButton, _statusLabel,
         });
 
@@ -225,6 +270,10 @@ internal sealed class MainForm : Form
                 2 => ThrottlePriority.Normal,
                 _ => ThrottlePriority.BelowNormal,
             },
+            DiskReadBytesPerSecond = KbPerSecToBytes(_diskReadBox.Value),
+            DiskWriteBytesPerSecond = KbPerSecToBytes(_diskWriteBox.Value),
+            NetworkTxBytesPerSecond = KbPerSecToBytes(_networkTxBox.Value),
+            GpuThrottle = _gpuLowBox.Checked ? GpuThrottleMode.LowPriority : GpuThrottleMode.Off,
         };
 
         try
@@ -246,6 +295,16 @@ internal sealed class MainForm : Form
             MessageBox.Show(this, ex.Message, "Launch failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
             CleanupRunning();
         }
+    }
+
+    private static long? KbPerSecToBytes(decimal kbPerSec)
+    {
+        if (kbPerSec <= 0)
+        {
+            return null;
+        }
+
+        return (long)kbPerSec * 1024L;
     }
 
     private void StopJob()

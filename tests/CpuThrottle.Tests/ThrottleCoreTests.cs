@@ -37,6 +37,91 @@ public class ThrottleOptionsTests
         var options = new ThrottleOptions { CpuPercent = 40, AffinityCoreCount = null };
         Assert.Same(options, options.Validate());
     }
+
+    [Fact]
+    public void EffectiveDiskBandwidth_SumsReadAndWriteHints()
+    {
+        var options = new ThrottleOptions
+        {
+            DiskReadBytesPerSecond = 10_000,
+            DiskWriteBytesPerSecond = 5_000,
+        };
+        Assert.Equal(15_000, options.EffectiveDiskBandwidthBytesPerSecond);
+    }
+
+    [Fact]
+    public void EffectiveDiskBandwidth_NullWhenUnset()
+    {
+        var options = new ThrottleOptions();
+        Assert.Null(options.EffectiveDiskBandwidthBytesPerSecond);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public void Validate_RejectsNonPositiveDiskRates(long rate)
+    {
+        var options = new ThrottleOptions { DiskReadBytesPerSecond = rate };
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Fact]
+    public void Validate_RejectsNonPositiveNetworkTx()
+    {
+        var options = new ThrottleOptions { NetworkTxBytesPerSecond = 0 };
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Fact]
+    public void Validate_AllowsResourceLimits()
+    {
+        var options = new ThrottleOptions
+        {
+            CpuPercent = 25,
+            DiskReadBytesPerSecond = 1024,
+            DiskWriteBytesPerSecond = 2048,
+            NetworkTxBytesPerSecond = 4096,
+            GpuThrottle = GpuThrottleMode.LowPriority,
+        };
+        Assert.Same(options, options.Validate());
+    }
+}
+
+public class BandwidthParserTests
+{
+    [Theory]
+    [InlineData("1024", 1024L)]
+    [InlineData("1K", 1024L)]
+    [InlineData("10M", 10L * 1024 * 1024)]
+    [InlineData("1.5M", (long)(1.5 * 1024 * 1024))]
+    [InlineData("2G", 2L * 1024 * 1024 * 1024)]
+    public void ParseBytesPerSecond_AcceptsSuffixes(string text, long expected)
+    {
+        Assert.Equal(expected, BandwidthParser.ParseBytesPerSecond(text));
+    }
+
+    [Fact]
+    public void ParseBytesPerSecond_NullOrEmpty_ReturnsNull()
+    {
+        Assert.Null(BandwidthParser.ParseBytesPerSecond(null));
+        Assert.Null(BandwidthParser.ParseBytesPerSecond("  "));
+    }
+
+    [Theory]
+    [InlineData("abc")]
+    [InlineData("0")]
+    [InlineData("-1M")]
+    public void ParseBytesPerSecond_RejectsInvalid(string text)
+    {
+        Assert.ThrowsAny<Exception>(() => BandwidthParser.ParseBytesPerSecond(text));
+    }
+
+    [Fact]
+    public void FormatBytesPerSecond_UsesSuffix()
+    {
+        Assert.Equal("10M", BandwidthParser.FormatBytesPerSecond(10L * 1024 * 1024));
+        Assert.Equal("512K", BandwidthParser.FormatBytesPerSecond(512 * 1024));
+    }
 }
 
 public class AffinityMaskTests

@@ -7,7 +7,7 @@ using System.Text;
 namespace CpuThrottle;
 
 /// <summary>
-/// A child process running inside a Windows Job Object with a hard CPU rate cap.
+/// A child process running inside a Windows Job Object with CPU (and optional disk / network Tx) rate limits.
 /// Dispose closes the job (and kills members when KillOnJobClose is set).
 /// </summary>
 public sealed class ThrottledProcess : IDisposable
@@ -54,7 +54,7 @@ public sealed class ThrottledProcess : IDisposable
     }
 
     /// <summary>
-    /// Starts <paramref name="fileName"/> with <paramref name="arguments"/> under a job with a hard CPU cap.
+    /// Starts <paramref name="fileName"/> with <paramref name="arguments"/> under a job with resource caps.
     /// Children created by the process inherit the job limits when they do not break away.
     /// </summary>
     [SupportedOSPlatform("windows")]
@@ -65,7 +65,7 @@ public sealed class ThrottledProcess : IDisposable
 
         if (!OperatingSystem.IsWindows())
         {
-            throw new PlatformNotSupportedException("CPU job throttling requires Windows 8+ / Windows 11.");
+            throw new PlatformNotSupportedException("Job Object resource throttling requires Windows 8+ / Windows 11.");
         }
 
         var fullPath = ResolveExecutable(fileName);
@@ -153,7 +153,7 @@ public sealed class ThrottledProcess : IDisposable
 
         if (!OperatingSystem.IsWindows())
         {
-            throw new PlatformNotSupportedException("CPU job throttling requires Windows 8+ / Windows 11.");
+            throw new PlatformNotSupportedException("Job Object resource throttling requires Windows 8+ / Windows 11.");
         }
 
         var access = NativeMethods.PROCESS_SET_INFORMATION
@@ -276,6 +276,56 @@ public sealed class ThrottledProcess : IDisposable
         }
 
         SetJobInfo(job, NativeMethods.JobObjectExtendedLimitInformation, extended);
+
+        if (options.EffectiveDiskBandwidthBytesPerSecond is long diskBandwidth)
+        {
+            // Windows Job Objects expose one MaxBandwidth for all I/O (reads + writes share the pool).
+            var io = new NativeMethods.JOBOBJECT_IO_RATE_CONTROL_INFORMATION
+            {
+                MaxIops = 0,
+                MaxBandwidth = diskBandwidth,
+                ReservationIops = 0,
+                VolumeName = IntPtr.Zero,
+                BaseIoSize = 0,
+                ControlFlags = NativeMethods.JOB_OBJECT_IO_RATE_CONTROL_ENABLE,
+            };
+
+            try
+            {
+                SetJobInfo(job, NativeMethods.JobObjectIoRateControlInformation, io);
+            }
+            catch (Win32Exception ex)
+            {
+                throw new Win32Exception(
+                    ex.NativeErrorCode,
+                    "Job Object I/O rate control failed. Disk bandwidth limits require Windows 10+ " +
+                    $"and may be unavailable in this session. Underlying error: {ex.Message}");
+            }
+        }
+
+        if (options.NetworkTxBytesPerSecond is long netTx)
+        {
+            // Job Object net rate control caps outbound (Tx) bandwidth for members of the job.
+            var net = new NativeMethods.JOBOBJECT_NET_RATE_CONTROL_INFORMATION
+            {
+                MaxBandwidth = unchecked((ulong)netTx),
+                ControlFlags = NativeMethods.JOB_OBJECT_NET_RATE_CONTROL_ENABLE
+                               | NativeMethods.JOB_OBJECT_NET_RATE_CONTROL_MAX_BANDWIDTH,
+                DscpTag = 0,
+            };
+
+            try
+            {
+                SetJobInfo(job, NativeMethods.JobObjectNetRateControlInformation, net);
+            }
+            catch (Win32Exception ex)
+            {
+                throw new Win32Exception(
+                    ex.NativeErrorCode,
+                    "Job Object network rate control failed. Network Tx limits require Windows 10+ " +
+                    $"(and typically work for TCP/UDP sockets owned by the job). Underlying error: {ex.Message}");
+            }
+        }
     }
 
     private static void ApplyProcessPolicies(IntPtr process, ThrottleOptions options)
@@ -296,6 +346,36 @@ public sealed class ThrottledProcess : IDisposable
         if (options.EfficiencyMode)
         {
             TryEnableEfficiencyMode(process);
+        }
+
+        if (options.GpuThrottle == GpuThrottleMode.LowPriority)
+        {
+            TrySetGpuLowPriority(process);
+        }
+    }
+
+    /// <summary>
+    /// Soft WDDM GPU scheduling hint. Not a hard GPU-% throttle — no public API provides one for arbitrary apps.
+    /// </summary>
+    private static void TrySetGpuLowPriority(IntPtr process)
+    {
+        try
+        {
+            var status = NativeMethods.D3DKMTSetProcessSchedulingPriorityClass(
+                process,
+                NativeMethods.D3DKMT_SCHEDULINGPRIORITYCLASS_IDLE);
+            if (status != 0)
+            {
+                Debug.WriteLine($"D3DKMTSetProcessSchedulingPriorityClass returned NTSTATUS 0x{status:X8}");
+            }
+        }
+        catch (DllNotFoundException ex)
+        {
+            Debug.WriteLine($"GPU priority hint unavailable: {ex.Message}");
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            Debug.WriteLine($"GPU priority hint unavailable: {ex.Message}");
         }
     }
 

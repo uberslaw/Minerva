@@ -1,13 +1,14 @@
 # CpuThrottle
 
-Windows 11 wrapper that launches taxing modelling apps under a **Job Object hard CPU cap**, so the desktop stays usable.
+Windows 11 wrapper that launches taxing modelling apps under a **Job Object** with a hard CPU cap (and optional disk / network Tx limits), so the desktop stays usable.
 
 ## What it does
 
 1. Creates a Windows Job Object
 2. Sets `JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP` (percent × 100)
-3. Starts the target process suspended, assigns it to the job, then resumes it
-4. Optionally enables Efficiency Mode (EcoQoS), lowers priority, and limits CPU affinity
+3. Optionally sets Job Object **I/O rate control** (combined disk bandwidth) and **network rate control** (outbound / Tx)
+4. Starts the target process suspended, assigns it to the job, then resumes it
+5. Optionally enables Efficiency Mode (EcoQoS), lowers CPU priority, limits affinity, and applies a **best-effort GPU scheduling hint**
 
 Child processes inherit the job unless they intentionally break away.
 
@@ -15,7 +16,7 @@ Child processes inherit the job unless they intentionally break away.
 
 | Project | Purpose |
 | --- | --- |
-| `src/CpuThrottle.Core` | Shared Job Object / EcoQoS / affinity helpers |
+| `src/CpuThrottle.Core` | Shared Job Object / EcoQoS / affinity / I/O / net helpers |
 | `src/CpuThrottle.Cli` | `throttle` CLI |
 | `src/CpuThrottle.Tray` | WinForms tray UI (slider, browse/drop exe, live CPU) |
 | `samples/CpuThrottle.SampleBurner` | Multi-thread CPU burner + optional child process tree |
@@ -58,6 +59,9 @@ dotnet publish src/CpuThrottle.Tray/CpuThrottle.Tray.csproj -c Release -r win-x6
 # Tighter cap, 4-core affinity, Efficiency Mode on (default)
 .\throttle --cpu 35 --cores 4 --priority below-normal -- "C:\Sim\solver.exe"
 
+# Also limit disk I/O hints and outbound network
+.\throttle --cpu 40 --disk-read 50M --disk-write 20M --network-tx 5M --gpu low -- "C:\Sim\solver.exe"
+
 # Attach to an already-running PID (fails if it is already in a conflicting job)
 .\throttle --cpu 40 --attach 12345
 
@@ -71,6 +75,10 @@ Useful flags:
 - `--cores` / `-n` — affinity to first N logical processors
 - `--efficiency` / `--no-efficiency` — EcoQoS toggle
 - `--priority` — `idle` | `below-normal` | `normal`
+- `--disk-read` / `-dr` — disk read bandwidth hint (`10M`, `512K`, …)
+- `--disk-write` / `-dw` — disk write bandwidth hint
+- `--network-tx` / `-nt` — network transmit (outbound) bandwidth cap
+- `--gpu` / `-g` — `off` | `low` (best-effort WDDM idle GPU priority)
 - `--wait` / `--no-wait` — wait for exit (default) or keep job alive until Ctrl+C
 - `--attach` / `-a` — throttle an existing PID
 
@@ -81,8 +89,19 @@ Run `CpuThrottle.exe` from the tray publish folder.
 - Browse or drag-drop an `.exe`
 - Set CPU slider (10–90%)
 - Optional affinity cores + Efficiency Mode + priority
+- Optional disk read/write KB/s, network Tx KB/s, GPU low-priority checkbox
 - Launch / stop; status shows approximate process CPU vs cap
 - Minimize to tray; double-click icon to restore
+
+## What is actually enforced vs best-effort
+
+| Resource | Mechanism | Enforcement |
+| --- | --- | --- |
+| **CPU %** | Job Object `CPU_RATE_CONTROL_HARD_CAP` | Hard cap (Windows 8+) |
+| **CPU affinity / priority / EcoQoS** | Job affinity + `SetPriorityClass` + power throttling | Soft / scheduling hints |
+| **Disk read / write** | Job Object I/O rate control `MaxBandwidth` | **Combined** hard bandwidth pool for the job (Windows 10+). Separate `--disk-read` / `--disk-write` values are **summed** into one MaxBandwidth; the kernel does **not** expose independent hard read vs write caps on job objects. |
+| **Network Tx** | Job Object net rate control `MaxBandwidth` | Hard outbound (transmit) cap for sockets owned by the job (Windows 10+). **Inbound / Rx is not limited.** Not a full WinDivert/WFP packet shaper. |
+| **GPU %** | `D3DKMTSetProcessSchedulingPriorityClass` (idle) when `--gpu low` | **Best-effort only.** There is no public user-mode API for a hard GPU utilization percent cap on arbitrary processes. |
 
 ## Validate process-tree throttling (Windows)
 
@@ -105,5 +124,6 @@ Core, CLI, SampleBurner, and tests compile on non-Windows hosts. The CLI refuses
 ## Requirements
 
 - Windows 8+ for Job Object CPU rate control (developed for Windows 11)
+- Windows 10+ for Job Object I/O and network rate control
 - .NET 8 SDK
 - Elevation only needed when the target process itself requires elevation

@@ -11,8 +11,15 @@ internal static class NativeMethods
     public const uint JOB_OBJECT_CPU_RATE_CONTROL_ENABLE = 0x1;
     public const uint JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP = 0x4;
 
+    public const uint JOB_OBJECT_IO_RATE_CONTROL_ENABLE = 0x1;
+
+    public const uint JOB_OBJECT_NET_RATE_CONTROL_ENABLE = 0x1;
+    public const uint JOB_OBJECT_NET_RATE_CONTROL_MAX_BANDWIDTH = 0x2;
+
     public const int JobObjectCpuRateControlInformation = 15;
     public const int JobObjectExtendedLimitInformation = 9;
+    public const int JobObjectNetRateControlInformation = 32;
+    public const int JobObjectIoRateControlInformation = 36;
 
     public const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
     public const uint JOB_OBJECT_LIMIT_AFFINITY = 0x00000010;
@@ -32,6 +39,9 @@ internal static class NativeMethods
     public const int ProcessPowerThrottling = 4;
 
     public const uint INFINITE = 0xFFFFFFFF;
+
+    /// <summary>D3DKMT_SCHEDULINGPRIORITYCLASS_IDLE</summary>
+    public const int D3DKMT_SCHEDULINGPRIORITYCLASS_IDLE = 0;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct SECURITY_ATTRIBUTES
@@ -116,6 +126,31 @@ internal static class NativeMethods
         public nuint PeakJobMemoryUsed;
     }
 
+    /// <summary>
+    /// Job Object I/O rate control (Windows 10+). MaxBandwidth is a combined read+write pool for the job.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_IO_RATE_CONTROL_INFORMATION
+    {
+        public long MaxIops;
+        public long MaxBandwidth;
+        public long ReservationIops;
+        public IntPtr VolumeName;
+        public uint BaseIoSize;
+        public uint ControlFlags;
+    }
+
+    /// <summary>
+    /// Job Object network rate control (Windows 10+). MaxBandwidth limits outbound (Tx) traffic for the job.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_NET_RATE_CONTROL_INFORMATION
+    {
+        public ulong MaxBandwidth;
+        public uint ControlFlags;
+        public byte DscpTag;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct PROCESS_POWER_THROTTLING_STATE
     {
@@ -183,4 +218,11 @@ internal static class NativeMethods
 
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern bool IsProcessInJob(IntPtr ProcessHandle, IntPtr JobHandle, out bool Result);
+
+    /// <summary>
+    /// Soft GPU scheduling priority for the process (WDDM). Returns NTSTATUS; 0 = success.
+    /// Best-effort only — not a hard GPU utilization cap.
+    /// </summary>
+    [DllImport("gdi32.dll", ExactSpelling = true)]
+    public static extern int D3DKMTSetProcessSchedulingPriorityClass(IntPtr hProcess, int PriorityClass);
 }

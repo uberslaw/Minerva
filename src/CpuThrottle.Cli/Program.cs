@@ -29,6 +29,27 @@ var priorityOption = new Option<string>(
     getDefaultValue: () => "below-normal");
 priorityOption.AddAlias("-p");
 
+var diskReadOption = new Option<string?>(
+    name: "--disk-read",
+    description: "Disk read bandwidth hint in bytes/sec (K/M/G suffixes ok). Combined with --disk-write into one Job Object MaxBandwidth pool.");
+diskReadOption.AddAlias("-dr");
+
+var diskWriteOption = new Option<string?>(
+    name: "--disk-write",
+    description: "Disk write bandwidth hint in bytes/sec (K/M/G suffixes ok). Combined with --disk-read into one Job Object MaxBandwidth pool.");
+diskWriteOption.AddAlias("-dw");
+
+var networkTxOption = new Option<string?>(
+    name: "--network-tx",
+    description: "Network transmit (outbound) bandwidth cap in bytes/sec (K/M/G suffixes ok). Job Object net rate control; inbound is not limited.");
+networkTxOption.AddAlias("-nt");
+
+var gpuOption = new Option<string>(
+    name: "--gpu",
+    description: "GPU scheduling hint: off | low (best-effort WDDM idle priority; not a hard GPU % cap).",
+    getDefaultValue: () => "off");
+gpuOption.AddAlias("-g");
+
 var waitOption = new Option<bool>(
     name: "--wait",
     description: "Wait for the child process to exit and forward its exit code.",
@@ -55,14 +76,18 @@ var argsArgument = new Argument<string[]>("args", "Arguments passed to the execu
 };
 
 var root = new RootCommand(
-    "Launch (or attach to) a process under a Windows Job Object with a hard CPU rate cap, " +
-    "so heavy modelling workloads leave the desktop usable.")
+    "Launch (or attach to) a process under a Windows Job Object with CPU, optional disk I/O, " +
+    "and optional network Tx rate limits, plus best-effort GPU scheduling hints.")
 {
     cpuOption,
     coresOption,
     efficiencyOption,
     noEfficiencyOption,
     priorityOption,
+    diskReadOption,
+    diskWriteOption,
+    networkTxOption,
+    gpuOption,
     waitOption,
     noWaitOption,
     attachOption,
@@ -78,6 +103,10 @@ root.SetHandler(async (context) =>
     var efficiency = context.ParseResult.GetValueForOption(efficiencyOption);
     var noEfficiency = context.ParseResult.GetValueForOption(noEfficiencyOption);
     var priorityText = context.ParseResult.GetValueForOption(priorityOption) ?? "below-normal";
+    var diskReadText = context.ParseResult.GetValueForOption(diskReadOption);
+    var diskWriteText = context.ParseResult.GetValueForOption(diskWriteOption);
+    var networkTxText = context.ParseResult.GetValueForOption(networkTxOption);
+    var gpuText = context.ParseResult.GetValueForOption(gpuOption) ?? "off";
     var wait = context.ParseResult.GetValueForOption(waitOption);
     var noWait = context.ParseResult.GetValueForOption(noWaitOption);
     var attachPid = context.ParseResult.GetValueForOption(attachOption);
@@ -97,17 +126,25 @@ root.SetHandler(async (context) =>
 
     if (!OperatingSystem.IsWindows())
     {
-        Console.Error.WriteLine("CpuThrottle requires Windows 8+ (Job Object CPU rate control). This host is not Windows.");
+        Console.Error.WriteLine("CpuThrottle requires Windows 8+ (Job Object rate control). This host is not Windows.");
         context.ExitCode = 2;
         return;
     }
 
     ThrottlePriority priority;
+    GpuThrottleMode gpu;
+    long? diskRead;
+    long? diskWrite;
+    long? networkTx;
     try
     {
         priority = ParsePriority(priorityText);
+        gpu = ParseGpu(gpuText);
+        diskRead = BandwidthParser.ParseBytesPerSecond(diskReadText);
+        diskWrite = BandwidthParser.ParseBytesPerSecond(diskWriteText);
+        networkTx = BandwidthParser.ParseBytesPerSecond(networkTxText);
     }
-    catch (ArgumentException ex)
+    catch (Exception ex) when (ex is ArgumentException or FormatException or OverflowException)
     {
         Console.Error.WriteLine(ex.Message);
         context.ExitCode = 2;
@@ -120,6 +157,10 @@ root.SetHandler(async (context) =>
         AffinityCoreCount = cores,
         EfficiencyMode = efficiency,
         Priority = priority,
+        DiskReadBytesPerSecond = diskRead,
+        DiskWriteBytesPerSecond = diskWrite,
+        NetworkTxBytesPerSecond = networkTx,
+        GpuThrottle = gpu,
         WorkingDirectory = workingDir,
     };
 
@@ -173,20 +214,22 @@ static int RunWindows(int? attachPid, string? executable, string[] args, Throttl
     ThrottledProcess process;
     if (attachPid is int pid)
     {
-        Console.WriteLine($"Attaching PID {pid} with CPU hard cap {options.CpuPercent}%...");
+        Console.WriteLine($"Attaching PID {pid} with {DescribeLimits(options)}...");
         process = ThrottledProcess.Attach(pid, options);
     }
     else
     {
         var argString = string.Join(' ', args.Select(QuoteIfNeeded));
-        Console.WriteLine($"Launching '{executable}' with CPU hard cap {options.CpuPercent}%...");
+        Console.WriteLine($"Launching '{executable}' with {DescribeLimits(options)}...");
         process = ThrottledProcess.Start(executable!, string.IsNullOrEmpty(argString) ? null : argString, options);
     }
 #pragma warning restore CA1416
 
     using (process)
     {
-        Console.WriteLine($"PID {process.ProcessId} is under job control (efficiency={(options.EfficiencyMode ? "on" : "off")}, priority={options.Priority}).");
+        Console.WriteLine(
+            $"PID {process.ProcessId} is under job control " +
+            $"(efficiency={(options.EfficiencyMode ? "on" : "off")}, priority={options.Priority}, gpu={options.GpuThrottle}).");
 
         if (!wait)
         {
@@ -217,12 +260,46 @@ static int RunWindows(int? attachPid, string? executable, string[] args, Throttl
     }
 }
 
+static string DescribeLimits(ThrottleOptions options)
+{
+    var parts = new List<string> { $"CPU hard cap {options.CpuPercent}%" };
+    if (options.DiskReadBytesPerSecond is long read)
+    {
+        parts.Add($"disk-read hint {BandwidthParser.FormatBytesPerSecond(read)}B/s");
+    }
+
+    if (options.DiskWriteBytesPerSecond is long write)
+    {
+        parts.Add($"disk-write hint {BandwidthParser.FormatBytesPerSecond(write)}B/s");
+    }
+
+    if (options.EffectiveDiskBandwidthBytesPerSecond is long combined
+        && (options.DiskReadBytesPerSecond is not null || options.DiskWriteBytesPerSecond is not null))
+    {
+        parts.Add($"disk combined MaxBandwidth {BandwidthParser.FormatBytesPerSecond(combined)}B/s");
+    }
+
+    if (options.NetworkTxBytesPerSecond is long tx)
+    {
+        parts.Add($"network Tx {BandwidthParser.FormatBytesPerSecond(tx)}B/s");
+    }
+
+    return string.Join(", ", parts);
+}
+
 static ThrottlePriority ParsePriority(string value) => value.Trim().ToLowerInvariant() switch
 {
     "idle" => ThrottlePriority.Idle,
     "below-normal" or "belownormal" or "below_normal" => ThrottlePriority.BelowNormal,
     "normal" => ThrottlePriority.Normal,
     _ => throw new ArgumentException($"Unknown priority '{value}'. Use idle, below-normal, or normal."),
+};
+
+static GpuThrottleMode ParseGpu(string value) => value.Trim().ToLowerInvariant() switch
+{
+    "off" or "none" or "false" or "0" => GpuThrottleMode.Off,
+    "low" or "low-priority" or "lowpriority" or "idle" or "true" or "1" => GpuThrottleMode.LowPriority,
+    _ => throw new ArgumentException($"Unknown GPU mode '{value}'. Use off or low."),
 };
 
 static string QuoteIfNeeded(string value)
