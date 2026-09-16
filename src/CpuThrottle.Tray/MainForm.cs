@@ -1,0 +1,325 @@
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.Versioning;
+
+namespace CpuThrottle.Tray;
+
+[SupportedOSPlatform("windows")]
+internal sealed class MainForm : Form
+{
+    private readonly TextBox _exeBox = new();
+    private readonly TextBox _argsBox = new();
+    private readonly TrackBar _cpuSlider = new();
+    private readonly Label _cpuValueLabel = new();
+    private readonly NumericUpDown _coresBox = new();
+    private readonly CheckBox _efficiencyBox = new();
+    private readonly ComboBox _priorityBox = new();
+    private readonly Button _browseButton = new();
+    private readonly Button _launchButton = new();
+    private readonly Button _stopButton = new();
+    private readonly Label _statusLabel = new();
+    private readonly NotifyIcon _trayIcon;
+    private readonly System.Windows.Forms.Timer _monitorTimer = new();
+
+    private ThrottledProcess? _running;
+    private ProcessCpuMonitor? _monitor;
+    private string? _lastExe;
+
+    public MainForm()
+    {
+        Text = "CpuThrottle";
+        Width = 520;
+        Height = 360;
+        MinimumSize = new Size(480, 320);
+        StartPosition = FormStartPosition.CenterScreen;
+        AllowDrop = true;
+        Font = new Font("Segoe UI", 9F);
+
+        var exeLabel = new Label { Text = "Executable", AutoSize = true, Left = 16, Top = 18 };
+        _exeBox.SetBounds(16, 40, 360, 27);
+        _exeBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _browseButton.Text = "Browse…";
+        _browseButton.SetBounds(388, 38, 100, 30);
+        _browseButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        _browseButton.Click += (_, _) => BrowseForExe();
+
+        var argsLabel = new Label { Text = "Arguments", AutoSize = true, Left = 16, Top = 78 };
+        _argsBox.SetBounds(16, 100, 472, 27);
+        _argsBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+
+        var cpuLabel = new Label { Text = "CPU hard cap", AutoSize = true, Left = 16, Top = 140 };
+        _cpuSlider.SetBounds(16, 162, 400, 45);
+        _cpuSlider.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _cpuSlider.Minimum = 10;
+        _cpuSlider.Maximum = 90;
+        _cpuSlider.TickFrequency = 10;
+        _cpuSlider.Value = 50;
+        _cpuSlider.ValueChanged += (_, _) => UpdateCpuLabel();
+        _cpuValueLabel.AutoSize = true;
+        _cpuValueLabel.Left = 430;
+        _cpuValueLabel.Top = 170;
+        _cpuValueLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+
+        var coresLabel = new Label { Text = "Affinity cores (0 = all)", AutoSize = true, Left = 16, Top = 210 };
+        _coresBox.SetBounds(180, 206, 60, 27);
+        _coresBox.Minimum = 0;
+        _coresBox.Maximum = Environment.ProcessorCount;
+        _coresBox.Value = 0;
+
+        _efficiencyBox.Text = "Efficiency Mode (EcoQoS)";
+        _efficiencyBox.AutoSize = true;
+        _efficiencyBox.Checked = true;
+        _efficiencyBox.Left = 260;
+        _efficiencyBox.Top = 210;
+
+        var priorityLabel = new Label { Text = "Priority", AutoSize = true, Left = 16, Top = 246 };
+        _priorityBox.SetBounds(80, 242, 140, 27);
+        _priorityBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        _priorityBox.Items.AddRange(new object[] { "Idle", "Below normal", "Normal" });
+        _priorityBox.SelectedIndex = 1;
+
+        _launchButton.Text = "Launch throttled";
+        _launchButton.SetBounds(16, 284, 140, 32);
+        _launchButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+        _launchButton.Click += (_, _) => Launch();
+
+        _stopButton.Text = "Stop job";
+        _stopButton.SetBounds(168, 284, 100, 32);
+        _stopButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+        _stopButton.Enabled = false;
+        _stopButton.Click += (_, _) => StopJob();
+
+        _statusLabel.AutoSize = false;
+        _statusLabel.SetBounds(280, 288, 208, 28);
+        _statusLabel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        _statusLabel.Text = "Ready — drop an .exe here or browse.";
+
+        Controls.AddRange(new Control[]
+        {
+            exeLabel, _exeBox, _browseButton,
+            argsLabel, _argsBox,
+            cpuLabel, _cpuSlider, _cpuValueLabel,
+            coresLabel, _coresBox, _efficiencyBox,
+            priorityLabel, _priorityBox,
+            _launchButton, _stopButton, _statusLabel,
+        });
+
+        _trayIcon = new NotifyIcon
+        {
+            Text = "CpuThrottle",
+            Visible = true,
+            Icon = SystemIcons.Application,
+            ContextMenuStrip = BuildTrayMenu(),
+        };
+        _trayIcon.DoubleClick += (_, _) =>
+        {
+            Show();
+            WindowState = FormWindowState.Normal;
+            Activate();
+        };
+
+        _monitorTimer.Interval = 1000;
+        _monitorTimer.Tick += (_, _) => RefreshStatus();
+
+        DragEnter += OnDragEnter;
+        DragDrop += OnDragDrop;
+        Resize += (_, _) =>
+        {
+            if (WindowState == FormWindowState.Minimized)
+            {
+                Hide();
+            }
+        };
+        FormClosing += OnFormClosing;
+
+        UpdateCpuLabel();
+    }
+
+    private ContextMenuStrip BuildTrayMenu()
+    {
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Open", null, (_, _) =>
+        {
+            Show();
+            WindowState = FormWindowState.Normal;
+            Activate();
+        });
+        menu.Items.Add("Launch last", null, (_, _) =>
+        {
+            if (!string.IsNullOrWhiteSpace(_lastExe))
+            {
+                _exeBox.Text = _lastExe;
+                Launch();
+            }
+        });
+        menu.Items.Add("Stop job", null, (_, _) => StopJob());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Exit", null, (_, _) =>
+        {
+            _trayIcon.Visible = false;
+            Application.Exit();
+        });
+        return menu;
+    }
+
+    private void UpdateCpuLabel() => _cpuValueLabel.Text = $"{_cpuSlider.Value}%";
+
+    private void BrowseForExe()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Filter = "Executables (*.exe)|*.exe|All files (*.*)|*.*",
+            Title = "Select modelling application",
+        };
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            _exeBox.Text = dialog.FileName;
+        }
+    }
+
+    private void OnDragEnter(object? sender, DragEventArgs e)
+    {
+        if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true)
+        {
+            e.Effect = DragDropEffects.Copy;
+        }
+    }
+
+    private void OnDragDrop(object? sender, DragEventArgs e)
+    {
+        if (e.Data?.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0)
+        {
+            _exeBox.Text = files[0];
+        }
+    }
+
+    private void Launch()
+    {
+        if (_running is not null)
+        {
+            MessageBox.Show(this, "A throttled job is already running. Stop it first.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var exe = _exeBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(exe))
+        {
+            MessageBox.Show(this, "Choose an executable to launch.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            MessageBox.Show(this, "CpuThrottle requires Windows.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var options = new ThrottleOptions
+        {
+            CpuPercent = _cpuSlider.Value,
+            AffinityCoreCount = _coresBox.Value > 0 ? (int)_coresBox.Value : null,
+            EfficiencyMode = _efficiencyBox.Checked,
+            Priority = _priorityBox.SelectedIndex switch
+            {
+                0 => ThrottlePriority.Idle,
+                2 => ThrottlePriority.Normal,
+                _ => ThrottlePriority.BelowNormal,
+            },
+        };
+
+        try
+        {
+            var args = string.IsNullOrWhiteSpace(_argsBox.Text) ? null : _argsBox.Text.Trim();
+            _running = ThrottledProcess.Start(exe, args, options);
+            _lastExe = exe;
+            _monitor = new ProcessCpuMonitor(_running.ProcessId);
+            _ = _monitor.SampleCpuPercent();
+            _monitorTimer.Start();
+            _launchButton.Enabled = false;
+            _stopButton.Enabled = true;
+            _statusLabel.Text = $"Running PID {_running.ProcessId} @ cap {_cpuSlider.Value}%";
+            _trayIcon.Text = $"CpuThrottle — PID {_running.ProcessId}";
+            _trayIcon.ShowBalloonTip(2000, "CpuThrottle", $"Started under {_cpuSlider.Value}% CPU cap.", ToolTipIcon.Info);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Launch failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            CleanupRunning();
+        }
+    }
+
+    private void StopJob()
+    {
+        if (_running is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _running.Terminate();
+        }
+        catch (Win32Exception ex)
+        {
+            Debug.WriteLine(ex);
+        }
+
+        CleanupRunning();
+        _statusLabel.Text = "Job stopped.";
+    }
+
+    private void RefreshStatus()
+    {
+        if (_running is null || _monitor is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_running.HasExited)
+            {
+                var code = _running.ExitCode;
+                CleanupRunning();
+                _statusLabel.Text = $"Exited with code {code}.";
+                return;
+            }
+
+            var cpu = _monitor.SampleCpuPercent();
+            _statusLabel.Text = $"PID {_running.ProcessId} — ~{cpu:0.0}% CPU (cap {_running.Options.CpuPercent}%)";
+            _trayIcon.Text = $"CpuThrottle — {cpu:0.0}% / {_running.Options.CpuPercent}%";
+        }
+        catch
+        {
+            CleanupRunning();
+            _statusLabel.Text = "Process ended.";
+        }
+    }
+
+    private void CleanupRunning()
+    {
+        _monitorTimer.Stop();
+        _monitor?.Dispose();
+        _monitor = null;
+        _running?.Dispose();
+        _running = null;
+        _launchButton.Enabled = true;
+        _stopButton.Enabled = false;
+        _trayIcon.Text = "CpuThrottle";
+    }
+
+    private void OnFormClosing(object? sender, FormClosingEventArgs e)
+    {
+        if (e.CloseReason == CloseReason.UserClosing)
+        {
+            e.Cancel = true;
+            Hide();
+            return;
+        }
+
+        CleanupRunning();
+        _trayIcon.Visible = false;
+        _trayIcon.Dispose();
+        _monitorTimer.Dispose();
+    }
+}

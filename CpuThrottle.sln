@@ -1,0 +1,59 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{680C4A94-2FDF-470C-A69F-DECCAB6B02BC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CpuThrottle.Core", "src\CpuThrottle.Core\CpuThrottle.Core.csproj", "{E0AF0325-676F-4D39-88DE-6DDFE0282F4D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CpuThrottle.Cli", "src\CpuThrottle.Cli\CpuThrottle.Cli.csproj", "{D01CE3A6-41D7-4208-A599-114A2C93F7EF}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{23097F32-501C-4C35-AA45-FC085E0A89F3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CpuThrottle.Tests", "tests\CpuThrottle.Tests\CpuThrottle.Tests.csproj", "{619E2DF5-C060-496D-BBF5-9EF5EFC32D13}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "samples", "samples", "{CABF6ABE-1D60-4364-9CC4-04D37CDF9261}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CpuThrottle.SampleBurner", "samples\CpuThrottle.SampleBurner\CpuThrottle.SampleBurner.csproj", "{9229F5C0-6914-4804-8EDE-A658FCBC280C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CpuThrottle.Tray", "src\CpuThrottle.Tray\CpuThrottle.Tray.csproj", "{76AF027A-3D28-4CE3-9D04-B3B799877DAD}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{E0AF0325-676F-4D39-88DE-6DDFE0282F4D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E0AF0325-676F-4D39-88DE-6DDFE0282F4D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E0AF0325-676F-4D39-88DE-6DDFE0282F4D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E0AF0325-676F-4D39-88DE-6DDFE0282F4D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D01CE3A6-41D7-4208-A599-114A2C93F7EF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D01CE3A6-41D7-4208-A599-114A2C93F7EF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D01CE3A6-41D7-4208-A599-114A2C93F7EF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D01CE3A6-41D7-4208-A599-114A2C93F7EF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{619E2DF5-C060-496D-BBF5-9EF5EFC32D13}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{619E2DF5-C060-496D-BBF5-9EF5EFC32D13}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{619E2DF5-C060-496D-BBF5-9EF5EFC32D13}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{619E2DF5-C060-496D-BBF5-9EF5EFC32D13}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9229F5C0-6914-4804-8EDE-A658FCBC280C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9229F5C0-6914-4804-8EDE-A658FCBC280C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9229F5C0-6914-4804-8EDE-A658FCBC280C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9229F5C0-6914-4804-8EDE-A658FCBC280C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{76AF027A-3D28-4CE3-9D04-B3B799877DAD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{76AF027A-3D28-4CE3-9D04-B3B799877DAD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{76AF027A-3D28-4CE3-9D04-B3B799877DAD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{76AF027A-3D28-4CE3-9D04-B3B799877DAD}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{E0AF0325-676F-4D39-88DE-6DDFE0282F4D} = {680C4A94-2FDF-470C-A69F-DECCAB6B02BC}
+		{D01CE3A6-41D7-4208-A599-114A2C93F7EF} = {680C4A94-2FDF-470C-A69F-DECCAB6B02BC}
+		{619E2DF5-C060-496D-BBF5-9EF5EFC32D13} = {23097F32-501C-4C35-AA45-FC085E0A89F3}
+		{9229F5C0-6914-4804-8EDE-A658FCBC280C} = {CABF6ABE-1D60-4364-9CC4-04D37CDF9261}
+		{76AF027A-3D28-4CE3-9D04-B3B799877DAD} = {680C4A94-2FDF-470C-A69F-DECCAB6B02BC}
+	EndGlobalSection
+EndGlobal

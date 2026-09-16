@@ -1,0 +1,9 @@
+<!--
+  On non-Windows hosts, skip the WinForms tray project (needs Windows Desktop TFM).
+-->
+<Project>
+  <PropertyGroup>
+    <CpuThrottleBuildTray Condition="'$(CpuThrottleBuildTray)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">true</CpuThrottleBuildTray>
+    <CpuThrottleBuildTray Condition="'$(CpuThrottleBuildTray)' == ''">false</CpuThrottleBuildTray>
+  </PropertyGroup>
+</Project>

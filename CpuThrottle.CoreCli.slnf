@@ -1,0 +1,11 @@
+{
+  "solution": {
+    "path": "CpuThrottle.sln",
+    "projects": [
+      "src/CpuThrottle.Core/CpuThrottle.Core.csproj",
+      "src/CpuThrottle.Cli/CpuThrottle.Cli.csproj",
+      "samples/CpuThrottle.SampleBurner/CpuThrottle.SampleBurner.csproj",
+      "tests/CpuThrottle.Tests/CpuThrottle.Tests.csproj"
+    ]
+  }
+}
