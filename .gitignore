@@ -1,0 +1,9 @@
+# Ignore build outputs
+**/bin/
+**/obj/
+**/publish/
+.vs/
+*.user
+*.suo
+.idea/
+.DS_Store
