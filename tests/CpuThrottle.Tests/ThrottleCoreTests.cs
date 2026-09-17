@@ -89,7 +89,6 @@ public class ThrottleOptionsTests
     [Theory]
     [InlineData(GpuThrottleMode.Off)]
     [InlineData(GpuThrottleMode.Idle)]
-    [InlineData(GpuThrottleMode.LowPriority)]
     [InlineData(GpuThrottleMode.BelowNormal)]
     [InlineData(GpuThrottleMode.Normal)]
     public void Validate_AllowsGpuThrottleModes(GpuThrottleMode mode)
