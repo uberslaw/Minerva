@@ -81,9 +81,27 @@ public class ThrottleOptionsTests
             DiskReadBytesPerSecond = 1024,
             DiskWriteBytesPerSecond = 2048,
             NetworkTxBytesPerSecond = 4096,
-            GpuThrottle = GpuThrottleMode.LowPriority,
+            GpuThrottle = GpuThrottleMode.Idle,
         };
         Assert.Same(options, options.Validate());
+    }
+
+    [Theory]
+    [InlineData(GpuThrottleMode.Off)]
+    [InlineData(GpuThrottleMode.Idle)]
+    [InlineData(GpuThrottleMode.LowPriority)]
+    [InlineData(GpuThrottleMode.BelowNormal)]
+    [InlineData(GpuThrottleMode.Normal)]
+    public void Validate_AllowsGpuThrottleModes(GpuThrottleMode mode)
+    {
+        var options = new ThrottleOptions { GpuThrottle = mode };
+        Assert.Same(options, options.Validate());
+    }
+
+    [Fact]
+    public void LowPriority_IsAliasForIdle()
+    {
+        Assert.Equal(GpuThrottleMode.Idle, GpuThrottleMode.LowPriority);
     }
 }
 

@@ -8,7 +8,7 @@ Windows 11 wrapper that launches taxing modelling apps under a **Job Object** wi
 2. Sets `JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP` (percent × 100)
 3. Optionally sets Job Object **I/O rate control** (combined disk bandwidth) and **network rate control** (outbound / Tx)
 4. Starts the target process suspended, assigns it to the job, then resumes it
-5. Optionally enables Efficiency Mode (EcoQoS), lowers CPU priority, limits affinity, and applies a **best-effort GPU scheduling hint**
+5. Optionally enables Efficiency Mode (EcoQoS), lowers CPU priority, limits affinity, and applies a **best-effort GPU scheduling priority** (WDDM idle / below-normal / normal — not a hard GPU %)
 
 Child processes inherit the job unless they intentionally break away.
 
@@ -59,8 +59,8 @@ dotnet publish src/CpuThrottle.Tray/CpuThrottle.Tray.csproj -c Release -r win-x6
 # Tighter cap, 4-core affinity, Efficiency Mode on (default)
 .\throttle --cpu 35 --cores 4 --priority below-normal -- "C:\Sim\solver.exe"
 
-# Also limit disk I/O hints and outbound network
-.\throttle --cpu 40 --disk-read 50M --disk-write 20M --network-tx 5M --gpu low -- "C:\Sim\solver.exe"
+# Also limit disk I/O hints and outbound network; GPU idle is best-effort only
+.\throttle --cpu 40 --disk-read 50M --disk-write 20M --network-tx 5M --gpu idle -- "C:\Sim\solver.exe"
 
 # Attach to an already-running PID (fails if it is already in a conflicting job)
 .\throttle --cpu 40 --attach 12345
@@ -78,23 +78,24 @@ Useful flags:
 - `--disk-read` / `-dr` — disk read bandwidth hint (`10M`, `512K`, …)
 - `--disk-write` / `-dw` — disk write bandwidth hint
 - `--network-tx` / `-nt` — network transmit (outbound) bandwidth cap
-- `--gpu` / `-g` — `off` | `low` (best-effort WDDM idle GPU priority)
+- `--gpu` / `-g` — `off` | `idle` (alias `low`) | `below-normal` | `normal` (best-effort WDDM GPU scheduling priority; **not** a hard GPU % cap)
 - `--wait` / `--no-wait` — wait for exit (default) or keep job alive until Ctrl+C
 - `--attach` / `-a` — throttle an existing PID
 
 ## Tray UI
 
-Run `CpuThrottle.exe` from the tray publish folder.
+Run `CpuThrottle.exe` from the tray publish folder (rebuild after pulling — older builds lack the process list).
 
 - Browse or drag-drop an `.exe`
-- Set CPU slider (10–90%)
-- Optional affinity cores + Efficiency Mode + priority
-- Optional disk read/write KB/s, network Tx KB/s, GPU low-priority checkbox
-- **Launch throttled** to start a new process under the job, or **Attach…** to pick a running process (sortable list: name, PID, CPU %, RAM, path) and throttle it with the same options
+- Set **CPU hard cap** slider (10–90%)
+- Optional affinity cores + Efficiency Mode + CPU priority
+- Optional disk read/write KB/s, network Tx KB/s
+- **GPU priority** slider: Off → Idle → Below normal → Normal (soft WDDM hint via `D3DKMTSetProcessSchedulingPriorityClass`; **not** a hard GPU utilization %)
+- **Running processes** list is on the main window (filter, sort by column, Refresh). Select a row and click **Throttle selected** (or double-click). **Pick process…** opens the larger full picker dialog; the tray menu has the same entry
+- **Launch throttled** starts a new process under the job with the current options
 - Access-denied / already-in-job attach failures show a clear message (try elevation or another process)
 - Stop job; status shows approximate process CPU vs cap
 - Minimize to tray; double-click icon to restore
-- Tray menu also has **Attach to process…**
 
 ## What is actually enforced vs best-effort
 
@@ -104,7 +105,7 @@ Run `CpuThrottle.exe` from the tray publish folder.
 | **CPU affinity / priority / EcoQoS** | Job affinity + `SetPriorityClass` + power throttling | Soft / scheduling hints |
 | **Disk read / write** | Job Object I/O rate control `MaxBandwidth` | **Combined** hard bandwidth pool for the job (Windows 10+). Separate `--disk-read` / `--disk-write` values are **summed** into one MaxBandwidth; the kernel does **not** expose independent hard read vs write caps on job objects. |
 | **Network Tx** | Job Object net rate control `MaxBandwidth` | Hard outbound (transmit) cap for sockets owned by the job (Windows 10+). **Inbound / Rx is not limited.** Not a full WinDivert/WFP packet shaper. |
-| **GPU %** | `D3DKMTSetProcessSchedulingPriorityClass` (idle) when `--gpu low` | **Best-effort only.** There is no public user-mode API for a hard GPU utilization percent cap on arbitrary processes. |
+| **GPU priority** | `D3DKMTSetProcessSchedulingPriorityClass` (`idle` / `below-normal` / `normal`) | **Best-effort only** (scheduling hint). There is no public user-mode API for a hard GPU utilization percent cap on arbitrary processes. Slider/CLI values are priority classes, not GPU %. |
 
 ## Validate process-tree throttling (Windows)
 

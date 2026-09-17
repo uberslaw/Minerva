@@ -126,7 +126,8 @@ public enum ThrottlePriority
 }
 
 /// <summary>
-/// GPU throttling is best-effort only: Windows does not expose a public hard GPU utilization cap for arbitrary processes.
+/// Best-effort WDDM GPU scheduling hint via <c>D3DKMTSetProcessSchedulingPriorityClass</c>.
+/// Windows does not expose a public hard GPU utilization percent cap for arbitrary processes.
 /// </summary>
 public enum GpuThrottleMode
 {
@@ -134,7 +135,16 @@ public enum GpuThrottleMode
     Off = 0,
 
     /// <summary>
-    /// Request idle GPU scheduling priority via D3DKMT (WDDM). Soft hint — not a percent hard cap.
+    /// Request idle GPU scheduling priority (most deferred). Soft hint — not a percent hard cap.
     /// </summary>
-    LowPriority = 1,
+    Idle = 1,
+
+    /// <summary>Alias for <see cref="Idle"/> (CLI <c>--gpu low</c> compatibility).</summary>
+    LowPriority = Idle,
+
+    /// <summary>Request below-normal GPU scheduling priority. Soft hint.</summary>
+    BelowNormal = 2,
+
+    /// <summary>Request normal GPU scheduling priority. Soft hint (usually a no-op vs default).</summary>
+    Normal = 3,
 }

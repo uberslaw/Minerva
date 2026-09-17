@@ -17,43 +17,55 @@ internal sealed class MainForm : Form
     private readonly NumericUpDown _diskReadBox = new();
     private readonly NumericUpDown _diskWriteBox = new();
     private readonly NumericUpDown _networkTxBox = new();
-    private readonly CheckBox _gpuLowBox = new();
+    private readonly TrackBar _gpuSlider = new();
+    private readonly Label _gpuValueLabel = new();
     private readonly Button _browseButton = new();
     private readonly Button _launchButton = new();
-    private readonly Button _attachButton = new();
+    private readonly Button _pickProcessButton = new();
+    private readonly Button _throttleSelectedButton = new();
+    private readonly Button _refreshProcessesButton = new();
     private readonly Button _stopButton = new();
     private readonly Label _statusLabel = new();
+    private readonly TextBox _processFilterBox = new();
+    private readonly ListView _processList = new();
+    private readonly Label _processStatusLabel = new();
     private readonly NotifyIcon _trayIcon;
     private readonly System.Windows.Forms.Timer _monitorTimer = new();
+    private readonly System.Windows.Forms.Timer _processRefreshTimer = new();
+    private readonly ProcessListSampler _processSampler = new();
 
     private ThrottledProcess? _running;
     private ProcessCpuMonitor? _monitor;
     private string? _lastExe;
+    private IReadOnlyList<RunningProcessEntry> _processEntries = Array.Empty<RunningProcessEntry>();
+    private ProcessSortColumn _processSortColumn = ProcessSortColumn.CpuPercent;
+    private bool _processSortAscending;
+    private bool _processRefreshInFlight;
 
     public MainForm()
     {
         Text = "CpuThrottle";
-        Width = 560;
-        Height = 520;
-        MinimumSize = new Size(520, 480);
+        Width = 720;
+        Height = 780;
+        MinimumSize = new Size(640, 700);
         StartPosition = FormStartPosition.CenterScreen;
         AllowDrop = true;
         Font = new Font("Segoe UI", 9F);
 
         var exeLabel = new Label { Text = "Executable", AutoSize = true, Left = 16, Top = 18 };
-        _exeBox.SetBounds(16, 40, 400, 27);
+        _exeBox.SetBounds(16, 40, 560, 27);
         _exeBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         _browseButton.Text = "Browse…";
-        _browseButton.SetBounds(428, 38, 100, 30);
+        _browseButton.SetBounds(588, 38, 100, 30);
         _browseButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _browseButton.Click += (_, _) => BrowseForExe();
 
         var argsLabel = new Label { Text = "Arguments", AutoSize = true, Left = 16, Top = 78 };
-        _argsBox.SetBounds(16, 100, 512, 27);
+        _argsBox.SetBounds(16, 100, 672, 27);
         _argsBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
         var cpuLabel = new Label { Text = "CPU hard cap", AutoSize = true, Left = 16, Top = 140 };
-        _cpuSlider.SetBounds(16, 162, 440, 45);
+        _cpuSlider.SetBounds(16, 162, 580, 45);
         _cpuSlider.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         _cpuSlider.Minimum = 10;
         _cpuSlider.Maximum = 90;
@@ -61,7 +73,7 @@ internal sealed class MainForm : Form
         _cpuSlider.Value = 50;
         _cpuSlider.ValueChanged += (_, _) => UpdateCpuLabel();
         _cpuValueLabel.AutoSize = true;
-        _cpuValueLabel.Left = 470;
+        _cpuValueLabel.Left = 610;
         _cpuValueLabel.Top = 170;
         _cpuValueLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
 
@@ -83,28 +95,38 @@ internal sealed class MainForm : Form
         _priorityBox.Items.AddRange(new object[] { "Idle", "Below normal", "Normal" });
         _priorityBox.SelectedIndex = 1;
 
-        _gpuLowBox.Text = "GPU low priority (best-effort)";
-        _gpuLowBox.AutoSize = true;
-        _gpuLowBox.Left = 240;
-        _gpuLowBox.Top = 246;
+        var gpuLabel = new Label { Text = "GPU priority (best-effort)", AutoSize = true, Left = 16, Top = 282 };
+        _gpuSlider.SetBounds(16, 304, 520, 45);
+        _gpuSlider.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _gpuSlider.Minimum = 0;
+        _gpuSlider.Maximum = 3;
+        _gpuSlider.TickFrequency = 1;
+        _gpuSlider.SmallChange = 1;
+        _gpuSlider.LargeChange = 1;
+        _gpuSlider.Value = 0;
+        _gpuSlider.ValueChanged += (_, _) => UpdateGpuLabel();
+        _gpuValueLabel.AutoSize = true;
+        _gpuValueLabel.Left = 550;
+        _gpuValueLabel.Top = 312;
+        _gpuValueLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
 
-        var diskReadLabel = new Label { Text = "Disk read KB/s (0 = off)", AutoSize = true, Left = 16, Top = 286 };
-        _diskReadBox.SetBounds(170, 282, 90, 27);
+        var diskReadLabel = new Label { Text = "Disk read KB/s (0 = off)", AutoSize = true, Left = 16, Top = 352 };
+        _diskReadBox.SetBounds(170, 348, 90, 27);
         _diskReadBox.Minimum = 0;
         _diskReadBox.Maximum = 100_000_000;
         _diskReadBox.Increment = 1024;
         _diskReadBox.Value = 0;
 
-        var diskWriteLabel = new Label { Text = "Disk write KB/s (0 = off)", AutoSize = true, Left = 280, Top = 286 };
-        _diskWriteBox.SetBounds(440, 282, 90, 27);
+        var diskWriteLabel = new Label { Text = "Disk write KB/s (0 = off)", AutoSize = true, Left = 280, Top = 352 };
+        _diskWriteBox.SetBounds(440, 348, 90, 27);
         _diskWriteBox.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _diskWriteBox.Minimum = 0;
         _diskWriteBox.Maximum = 100_000_000;
         _diskWriteBox.Increment = 1024;
         _diskWriteBox.Value = 0;
 
-        var networkLabel = new Label { Text = "Network Tx KB/s (0 = off)", AutoSize = true, Left = 16, Top = 322 };
-        _networkTxBox.SetBounds(180, 318, 90, 27);
+        var networkLabel = new Label { Text = "Network Tx KB/s (0 = off)", AutoSize = true, Left = 16, Top = 388 };
+        _networkTxBox.SetBounds(180, 384, 90, 27);
         _networkTxBox.Minimum = 0;
         _networkTxBox.Maximum = 100_000_000;
         _networkTxBox.Increment = 1024;
@@ -112,36 +134,83 @@ internal sealed class MainForm : Form
 
         var noteLabel = new Label
         {
-            Text = "Disk read/write share one Job Object MaxBandwidth; network Tx is outbound-only; GPU is a soft hint.",
+            Text = "Disk read/write share one Job Object MaxBandwidth; network Tx is outbound-only; GPU slider is a soft WDDM priority hint (not a hard GPU %).",
             AutoSize = false,
             Left = 16,
-            Top = 352,
-            Width = 512,
+            Top = 418,
+            Width = 672,
             Height = 32,
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             ForeColor = SystemColors.GrayText,
         };
 
+        var processSectionLabel = new Label
+        {
+            Text = "Running processes — select one and click Throttle selected, or open the full picker.",
+            AutoSize = true,
+            Left = 16,
+            Top = 456,
+        };
+
+        var filterLabel = new Label { Text = "Filter", AutoSize = true, Left = 16, Top = 486 };
+        _processFilterBox.SetBounds(60, 482, 500, 27);
+        _processFilterBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _processFilterBox.PlaceholderText = "Name, path, or PID…";
+        _processFilterBox.TextChanged += (_, _) => RebuildProcessList();
+
+        _refreshProcessesButton.Text = "Refresh";
+        _refreshProcessesButton.SetBounds(572, 480, 116, 30);
+        _refreshProcessesButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        _refreshProcessesButton.Click += (_, _) => BeginProcessRefresh();
+
+        _processList.SetBounds(16, 518, 672, 140);
+        _processList.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        _processList.View = View.Details;
+        _processList.FullRowSelect = true;
+        _processList.HideSelection = false;
+        _processList.MultiSelect = false;
+        _processList.GridLines = true;
+        _processList.Columns.Add("Name", 160);
+        _processList.Columns.Add("PID", 70, HorizontalAlignment.Right);
+        _processList.Columns.Add("CPU %", 70, HorizontalAlignment.Right);
+        _processList.Columns.Add("RAM", 90, HorizontalAlignment.Right);
+        _processList.Columns.Add("Path", 250);
+        _processList.ColumnClick += OnProcessColumnClick;
+        _processList.SelectedIndexChanged += (_, _) => UpdateThrottleSelectedEnabled();
+        _processList.DoubleClick += (_, _) => ThrottleSelectedFromList();
+
+        _processStatusLabel.AutoSize = false;
+        _processStatusLabel.SetBounds(16, 664, 672, 20);
+        _processStatusLabel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        _processStatusLabel.ForeColor = SystemColors.GrayText;
+        _processStatusLabel.Text = "Sampling processes…";
+
         _launchButton.Text = "Launch throttled";
-        _launchButton.SetBounds(16, 396, 130, 32);
+        _launchButton.SetBounds(16, 692, 130, 32);
         _launchButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         _launchButton.Click += (_, _) => Launch();
 
-        _attachButton.Text = "Attach…";
-        _attachButton.SetBounds(154, 396, 100, 32);
-        _attachButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-        _attachButton.Click += (_, _) => AttachFromList();
+        _pickProcessButton.Text = "Pick process…";
+        _pickProcessButton.SetBounds(154, 692, 120, 32);
+        _pickProcessButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+        _pickProcessButton.Click += (_, _) => AttachFromPickerDialog();
+
+        _throttleSelectedButton.Text = "Throttle selected";
+        _throttleSelectedButton.SetBounds(282, 692, 130, 32);
+        _throttleSelectedButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+        _throttleSelectedButton.Enabled = false;
+        _throttleSelectedButton.Click += (_, _) => ThrottleSelectedFromList();
 
         _stopButton.Text = "Stop job";
-        _stopButton.SetBounds(262, 396, 100, 32);
+        _stopButton.SetBounds(420, 692, 100, 32);
         _stopButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         _stopButton.Enabled = false;
         _stopButton.Click += (_, _) => StopJob();
 
         _statusLabel.AutoSize = false;
-        _statusLabel.SetBounds(16, 440, 512, 28);
+        _statusLabel.SetBounds(16, 732, 672, 28);
         _statusLabel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-        _statusLabel.Text = "Ready — drop an .exe, browse, or Attach to a running process.";
+        _statusLabel.Text = "Ready — launch an .exe, or pick a running process from the list below.";
 
         Controls.AddRange(new Control[]
         {
@@ -149,10 +218,13 @@ internal sealed class MainForm : Form
             argsLabel, _argsBox,
             cpuLabel, _cpuSlider, _cpuValueLabel,
             coresLabel, _coresBox, _efficiencyBox,
-            priorityLabel, _priorityBox, _gpuLowBox,
+            priorityLabel, _priorityBox,
+            gpuLabel, _gpuSlider, _gpuValueLabel,
             diskReadLabel, _diskReadBox, diskWriteLabel, _diskWriteBox,
             networkLabel, _networkTxBox, noteLabel,
-            _launchButton, _attachButton, _stopButton, _statusLabel,
+            processSectionLabel, filterLabel, _processFilterBox, _refreshProcessesButton,
+            _processList, _processStatusLabel,
+            _launchButton, _pickProcessButton, _throttleSelectedButton, _stopButton, _statusLabel,
         });
 
         _trayIcon = new NotifyIcon
@@ -172,6 +244,9 @@ internal sealed class MainForm : Form
         _monitorTimer.Interval = 1000;
         _monitorTimer.Tick += (_, _) => RefreshStatus();
 
+        _processRefreshTimer.Interval = 2000;
+        _processRefreshTimer.Tick += (_, _) => BeginProcessRefresh();
+
         DragEnter += OnDragEnter;
         DragDrop += OnDragDrop;
         Resize += (_, _) =>
@@ -182,8 +257,14 @@ internal sealed class MainForm : Form
             }
         };
         FormClosing += OnFormClosing;
+        Shown += (_, _) =>
+        {
+            BeginProcessRefresh();
+            _processRefreshTimer.Start();
+        };
 
         UpdateCpuLabel();
+        UpdateGpuLabel();
     }
 
     private ContextMenuStrip BuildTrayMenu()
@@ -203,12 +284,12 @@ internal sealed class MainForm : Form
                 Launch();
             }
         });
-        menu.Items.Add("Attach to process…", null, (_, _) =>
+        menu.Items.Add("Pick process…", null, (_, _) =>
         {
             Show();
             WindowState = FormWindowState.Normal;
             Activate();
-            AttachFromList();
+            AttachFromPickerDialog();
         });
         menu.Items.Add("Stop job", null, (_, _) => StopJob());
         menu.Items.Add(new ToolStripSeparator());
@@ -221,6 +302,24 @@ internal sealed class MainForm : Form
     }
 
     private void UpdateCpuLabel() => _cpuValueLabel.Text = $"{_cpuSlider.Value}%";
+
+    private void UpdateGpuLabel() => _gpuValueLabel.Text = DescribeGpuSlider(_gpuSlider.Value);
+
+    private static string DescribeGpuSlider(int value) => value switch
+    {
+        1 => "Idle",
+        2 => "Below normal",
+        3 => "Normal",
+        _ => "Off",
+    };
+
+    private GpuThrottleMode SelectedGpuMode() => _gpuSlider.Value switch
+    {
+        1 => GpuThrottleMode.Idle,
+        2 => GpuThrottleMode.BelowNormal,
+        3 => GpuThrottleMode.Normal,
+        _ => GpuThrottleMode.Off,
+    };
 
     private void BrowseForExe()
     {
@@ -277,7 +376,7 @@ internal sealed class MainForm : Form
         }
     }
 
-    private void AttachFromList()
+    private void AttachFromPickerDialog()
     {
         if (!EnsureCanStartJob())
         {
@@ -290,6 +389,32 @@ internal sealed class MainForm : Form
             return;
         }
 
+        AttachPid(pid);
+    }
+
+    private void ThrottleSelectedFromList()
+    {
+        if (!EnsureCanStartJob())
+        {
+            return;
+        }
+
+        if (_processList.SelectedItems.Count == 0 || _processList.SelectedItems[0].Tag is not int pid)
+        {
+            MessageBox.Show(
+                this,
+                "Select a process in the list, or click Pick process… for the full picker.",
+                Text,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        AttachPid(pid);
+    }
+
+    private void AttachPid(int pid)
+    {
         try
         {
             BeginJob(ThrottledProcess.Attach(pid, BuildOptions()), exePath: null, attached: true);
@@ -337,7 +462,7 @@ internal sealed class MainForm : Form
         DiskReadBytesPerSecond = KbPerSecToBytes(_diskReadBox.Value),
         DiskWriteBytesPerSecond = KbPerSecToBytes(_diskWriteBox.Value),
         NetworkTxBytesPerSecond = KbPerSecToBytes(_networkTxBox.Value),
-        GpuThrottle = _gpuLowBox.Checked ? GpuThrottleMode.LowPriority : GpuThrottleMode.Off,
+        GpuThrottle = SelectedGpuMode(),
     };
 
     private void BeginJob(ThrottledProcess process, string? exePath, bool attached)
@@ -351,16 +476,15 @@ internal sealed class MainForm : Form
         _monitor = new ProcessCpuMonitor(_running.ProcessId);
         _ = _monitor.SampleCpuPercent();
         _monitorTimer.Start();
-        _launchButton.Enabled = false;
-        _attachButton.Enabled = false;
-        _stopButton.Enabled = true;
+        SetJobControlsEnabled(jobRunning: true);
         var verb = attached ? "Attached" : "Running";
-        _statusLabel.Text = $"{verb} PID {_running.ProcessId} @ cap {_cpuSlider.Value}%";
+        var gpu = DescribeGpuSlider(_gpuSlider.Value);
+        _statusLabel.Text = $"{verb} PID {_running.ProcessId} @ CPU {_cpuSlider.Value}%, GPU {gpu}";
         _trayIcon.Text = $"CpuThrottle — PID {_running.ProcessId}";
         _trayIcon.ShowBalloonTip(
             2000,
             "CpuThrottle",
-            $"{verb} under {_cpuSlider.Value}% CPU cap.",
+            $"{verb} under {_cpuSlider.Value}% CPU cap (GPU {gpu}).",
             ToolTipIcon.Info);
     }
 
@@ -429,10 +553,162 @@ internal sealed class MainForm : Form
         _monitor = null;
         _running?.Dispose();
         _running = null;
-        _launchButton.Enabled = true;
-        _attachButton.Enabled = true;
-        _stopButton.Enabled = false;
+        SetJobControlsEnabled(jobRunning: false);
         _trayIcon.Text = "CpuThrottle";
+    }
+
+    private void SetJobControlsEnabled(bool jobRunning)
+    {
+        _launchButton.Enabled = !jobRunning;
+        _pickProcessButton.Enabled = !jobRunning;
+        _throttleSelectedButton.Enabled = !jobRunning && _processList.SelectedItems.Count > 0;
+        _stopButton.Enabled = jobRunning;
+    }
+
+    private void UpdateThrottleSelectedEnabled()
+    {
+        _throttleSelectedButton.Enabled = _running is null && _processList.SelectedItems.Count > 0;
+    }
+
+    private void OnProcessColumnClick(object? sender, ColumnClickEventArgs e)
+    {
+        var column = e.Column switch
+        {
+            1 => ProcessSortColumn.ProcessId,
+            2 => ProcessSortColumn.CpuPercent,
+            3 => ProcessSortColumn.WorkingSet,
+            4 => ProcessSortColumn.Path,
+            _ => ProcessSortColumn.Name,
+        };
+
+        if (_processSortColumn == column)
+        {
+            _processSortAscending = !_processSortAscending;
+        }
+        else
+        {
+            _processSortColumn = column;
+            _processSortAscending = column is ProcessSortColumn.Name or ProcessSortColumn.Path or ProcessSortColumn.ProcessId;
+        }
+
+        RebuildProcessList();
+    }
+
+    private void BeginProcessRefresh()
+    {
+        if (_processRefreshInFlight || IsDisposed)
+        {
+            return;
+        }
+
+        _processRefreshInFlight = true;
+        _refreshProcessesButton.Enabled = false;
+        _processStatusLabel.Text = "Refreshing process list…";
+
+        _ = Task.Run(() =>
+        {
+            IReadOnlyList<RunningProcessEntry> sample;
+            Exception? error = null;
+            try
+            {
+                sample = _processSampler.Sample();
+            }
+            catch (Exception ex)
+            {
+                sample = Array.Empty<RunningProcessEntry>();
+                error = ex;
+            }
+
+            PostToUi(() =>
+            {
+                if (IsDisposed)
+                {
+                    return;
+                }
+
+                _processRefreshInFlight = false;
+                _refreshProcessesButton.Enabled = true;
+                if (error is not null)
+                {
+                    _processStatusLabel.Text = $"Refresh failed: {error.Message}";
+                    return;
+                }
+
+                _processEntries = sample;
+                RebuildProcessList();
+                _processStatusLabel.Text = $"{_processList.Items.Count} processes — double-click or use Throttle selected.";
+            });
+        });
+    }
+
+    private void PostToUi(Action action)
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            try
+            {
+                BeginInvoke(action);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Form closed while sample was in flight.
+            }
+
+            return;
+        }
+
+        action();
+    }
+
+    private void RebuildProcessList()
+    {
+        var filter = _processFilterBox.Text.Trim();
+        IEnumerable<RunningProcessEntry> filtered = _processEntries;
+        if (!string.IsNullOrEmpty(filter))
+        {
+            filtered = _processEntries.Where(e =>
+                e.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                || e.Path.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                || e.ProcessId.ToString().Contains(filter, StringComparison.Ordinal));
+        }
+
+        var sorted = ProcessListSorter.Sort(filtered, _processSortColumn, _processSortAscending);
+        var previousPid = _processList.SelectedItems.Count > 0
+            && int.TryParse(_processList.SelectedItems[0].SubItems[1].Text, out var pid)
+                ? pid
+                : (int?)null;
+
+        _processList.BeginUpdate();
+        try
+        {
+            _processList.Items.Clear();
+            foreach (var entry in sorted)
+            {
+                var item = new ListViewItem(entry.Name);
+                item.SubItems.Add(entry.ProcessId.ToString());
+                item.SubItems.Add(ProcessListFormatter.FormatCpuPercent(entry.CpuPercent));
+                item.SubItems.Add(ProcessListFormatter.FormatWorkingSet(entry.WorkingSetBytes));
+                item.SubItems.Add(string.IsNullOrEmpty(entry.Path) ? "(unavailable)" : entry.Path);
+                item.Tag = entry.ProcessId;
+                _processList.Items.Add(item);
+                if (previousPid == entry.ProcessId)
+                {
+                    item.Selected = true;
+                    item.EnsureVisible();
+                }
+            }
+        }
+        finally
+        {
+            _processList.EndUpdate();
+        }
+
+        UpdateThrottleSelectedEnabled();
     }
 
     private void OnFormClosing(object? sender, FormClosingEventArgs e)
@@ -444,6 +720,8 @@ internal sealed class MainForm : Form
             return;
         }
 
+        _processRefreshTimer.Stop();
+        _processRefreshTimer.Dispose();
         CleanupRunning();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();

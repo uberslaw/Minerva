@@ -46,7 +46,7 @@ networkTxOption.AddAlias("-nt");
 
 var gpuOption = new Option<string>(
     name: "--gpu",
-    description: "GPU scheduling hint: off | low (best-effort WDDM idle priority; not a hard GPU % cap).",
+    description: "Best-effort WDDM GPU scheduling hint (not a hard GPU % cap): off | idle|low | below-normal | normal.",
     getDefaultValue: () => "off");
 gpuOption.AddAlias("-g");
 
@@ -298,8 +298,11 @@ static ThrottlePriority ParsePriority(string value) => value.Trim().ToLowerInvar
 static GpuThrottleMode ParseGpu(string value) => value.Trim().ToLowerInvariant() switch
 {
     "off" or "none" or "false" or "0" => GpuThrottleMode.Off,
-    "low" or "low-priority" or "lowpriority" or "idle" or "true" or "1" => GpuThrottleMode.LowPriority,
-    _ => throw new ArgumentException($"Unknown GPU mode '{value}'. Use off or low."),
+    "low" or "low-priority" or "lowpriority" or "idle" or "true" or "1" => GpuThrottleMode.Idle,
+    "below-normal" or "belownormal" or "below_normal" or "2" => GpuThrottleMode.BelowNormal,
+    "normal" or "3" => GpuThrottleMode.Normal,
+    _ => throw new ArgumentException(
+        $"Unknown GPU mode '{value}'. Use off, idle (or low), below-normal, or normal."),
 };
 
 static string QuoteIfNeeded(string value)

@@ -348,25 +348,36 @@ public sealed class ThrottledProcess : IDisposable
             TryEnableEfficiencyMode(process);
         }
 
-        if (options.GpuThrottle == GpuThrottleMode.LowPriority)
+        if (options.GpuThrottle != GpuThrottleMode.Off)
         {
-            TrySetGpuLowPriority(process);
+            TrySetGpuPriority(process, options.GpuThrottle);
         }
     }
 
     /// <summary>
     /// Soft WDDM GPU scheduling hint. Not a hard GPU-% throttle — no public API provides one for arbitrary apps.
     /// </summary>
-    private static void TrySetGpuLowPriority(IntPtr process)
+    private static void TrySetGpuPriority(IntPtr process, GpuThrottleMode mode)
     {
+        var priorityClass = mode switch
+        {
+            GpuThrottleMode.Idle => NativeMethods.D3DKMT_SCHEDULINGPRIORITYCLASS_IDLE,
+            GpuThrottleMode.BelowNormal => NativeMethods.D3DKMT_SCHEDULINGPRIORITYCLASS_BELOW_NORMAL,
+            GpuThrottleMode.Normal => NativeMethods.D3DKMT_SCHEDULINGPRIORITYCLASS_NORMAL,
+            _ => (int?)null,
+        };
+
+        if (priorityClass is not int clazz)
+        {
+            return;
+        }
+
         try
         {
-            var status = NativeMethods.D3DKMTSetProcessSchedulingPriorityClass(
-                process,
-                NativeMethods.D3DKMT_SCHEDULINGPRIORITYCLASS_IDLE);
+            var status = NativeMethods.D3DKMTSetProcessSchedulingPriorityClass(process, clazz);
             if (status != 0)
             {
-                Debug.WriteLine($"D3DKMTSetProcessSchedulingPriorityClass returned NTSTATUS 0x{status:X8}");
+                Debug.WriteLine($"D3DKMTSetProcessSchedulingPriorityClass({mode}) returned NTSTATUS 0x{status:X8}");
             }
         }
         catch (DllNotFoundException ex)

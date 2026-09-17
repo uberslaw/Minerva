@@ -40,8 +40,13 @@ internal static class NativeMethods
 
     public const uint INFINITE = 0xFFFFFFFF;
 
-    /// <summary>D3DKMT_SCHEDULINGPRIORITYCLASS_IDLE</summary>
+    // D3DKMT_SCHEDULINGPRIORITYCLASS (d3dkmthk.h) — soft WDDM hints, not hard GPU %.
     public const int D3DKMT_SCHEDULINGPRIORITYCLASS_IDLE = 0;
+    public const int D3DKMT_SCHEDULINGPRIORITYCLASS_BELOW_NORMAL = 1;
+    public const int D3DKMT_SCHEDULINGPRIORITYCLASS_NORMAL = 2;
+    public const int D3DKMT_SCHEDULINGPRIORITYCLASS_ABOVE_NORMAL = 3;
+    public const int D3DKMT_SCHEDULINGPRIORITYCLASS_HIGH = 4;
+    public const int D3DKMT_SCHEDULINGPRIORITYCLASS_REALTIME = 5;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct SECURITY_ATTRIBUTES
