@@ -18,7 +18,7 @@ Child processes inherit the job unless they intentionally break away.
 | --- | --- |
 | `src/CpuThrottle.Core` | Shared Job Object / EcoQoS / affinity / I/O / net helpers |
 | `src/CpuThrottle.Cli` | `throttle` CLI |
-| `src/CpuThrottle.Tray` | WinForms tray UI (slider, browse/drop exe, live CPU) |
+| `src/CpuThrottle.Tray` | WinForms tray UI (launch, attach from process list, live CPU) |
 | `samples/CpuThrottle.SampleBurner` | Multi-thread CPU burner + optional child process tree |
 | `tests/CpuThrottle.Tests` | Unit tests + burner process-tree smoke test |
 
@@ -90,8 +90,11 @@ Run `CpuThrottle.exe` from the tray publish folder.
 - Set CPU slider (10–90%)
 - Optional affinity cores + Efficiency Mode + priority
 - Optional disk read/write KB/s, network Tx KB/s, GPU low-priority checkbox
-- Launch / stop; status shows approximate process CPU vs cap
+- **Launch throttled** to start a new process under the job, or **Attach…** to pick a running process (sortable list: name, PID, CPU %, RAM, path) and throttle it with the same options
+- Access-denied / already-in-job attach failures show a clear message (try elevation or another process)
+- Stop job; status shows approximate process CPU vs cap
 - Minimize to tray; double-click icon to restore
+- Tray menu also has **Attach to process…**
 
 ## What is actually enforced vs best-effort
 
