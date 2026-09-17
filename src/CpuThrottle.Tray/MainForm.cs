@@ -30,6 +30,7 @@ internal sealed class MainForm : Form
     private readonly ListView _processList = new();
     private readonly Label _processStatusLabel = new();
     private readonly NotifyIcon _trayIcon;
+    private readonly Icon _appIcon;
     private readonly System.Windows.Forms.Timer _monitorTimer = new();
     private readonly System.Windows.Forms.Timer _processRefreshTimer = new();
     private readonly ProcessListSampler _processSampler = new();
@@ -44,7 +45,9 @@ internal sealed class MainForm : Form
 
     public MainForm()
     {
+        _appIcon = LoadAppIcon();
         Text = "CpuThrottle";
+        Icon = _appIcon;
         Width = 720;
         Height = 780;
         MinimumSize = new Size(640, 700);
@@ -231,7 +234,7 @@ internal sealed class MainForm : Form
         {
             Text = "CpuThrottle",
             Visible = true,
-            Icon = SystemIcons.Application,
+            Icon = _appIcon,
             ContextMenuStrip = BuildTrayMenu(),
         };
         _trayIcon.DoubleClick += (_, _) =>
@@ -711,6 +714,20 @@ internal sealed class MainForm : Form
         UpdateThrottleSelectedEnabled();
     }
 
+    private static Icon LoadAppIcon()
+    {
+        var assembly = typeof(MainForm).Assembly;
+        using var stream = assembly.GetManifestResourceStream("CpuThrottle.Tray.Assets.minerva.ico");
+        if (stream is null)
+        {
+            return SystemIcons.Application;
+        }
+
+        // Clone so the icon owns its data after the stream is disposed.
+        using var loaded = new Icon(stream);
+        return (Icon)loaded.Clone();
+    }
+
     private void OnFormClosing(object? sender, FormClosingEventArgs e)
     {
         if (e.CloseReason == CloseReason.UserClosing)
@@ -726,5 +743,9 @@ internal sealed class MainForm : Form
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _monitorTimer.Dispose();
+        if (!ReferenceEquals(_appIcon, SystemIcons.Application))
+        {
+            _appIcon.Dispose();
+        }
     }
 }
