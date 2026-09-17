@@ -20,6 +20,7 @@ internal sealed class MainForm : Form
     private readonly CheckBox _gpuLowBox = new();
     private readonly Button _browseButton = new();
     private readonly Button _launchButton = new();
+    private readonly Button _attachButton = new();
     private readonly Button _stopButton = new();
     private readonly Label _statusLabel = new();
     private readonly NotifyIcon _trayIcon;
@@ -33,8 +34,8 @@ internal sealed class MainForm : Form
     {
         Text = "CpuThrottle";
         Width = 560;
-        Height = 480;
-        MinimumSize = new Size(520, 440);
+        Height = 520;
+        MinimumSize = new Size(520, 480);
         StartPosition = FormStartPosition.CenterScreen;
         AllowDrop = true;
         Font = new Font("Segoe UI", 9F);
@@ -122,20 +123,25 @@ internal sealed class MainForm : Form
         };
 
         _launchButton.Text = "Launch throttled";
-        _launchButton.SetBounds(16, 396, 140, 32);
+        _launchButton.SetBounds(16, 396, 130, 32);
         _launchButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         _launchButton.Click += (_, _) => Launch();
 
+        _attachButton.Text = "Attach…";
+        _attachButton.SetBounds(154, 396, 100, 32);
+        _attachButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+        _attachButton.Click += (_, _) => AttachFromList();
+
         _stopButton.Text = "Stop job";
-        _stopButton.SetBounds(168, 396, 100, 32);
+        _stopButton.SetBounds(262, 396, 100, 32);
         _stopButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         _stopButton.Enabled = false;
         _stopButton.Click += (_, _) => StopJob();
 
         _statusLabel.AutoSize = false;
-        _statusLabel.SetBounds(280, 400, 248, 28);
+        _statusLabel.SetBounds(16, 440, 512, 28);
         _statusLabel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-        _statusLabel.Text = "Ready — drop an .exe here or browse.";
+        _statusLabel.Text = "Ready — drop an .exe, browse, or Attach to a running process.";
 
         Controls.AddRange(new Control[]
         {
@@ -146,7 +152,7 @@ internal sealed class MainForm : Form
             priorityLabel, _priorityBox, _gpuLowBox,
             diskReadLabel, _diskReadBox, diskWriteLabel, _diskWriteBox,
             networkLabel, _networkTxBox, noteLabel,
-            _launchButton, _stopButton, _statusLabel,
+            _launchButton, _attachButton, _stopButton, _statusLabel,
         });
 
         _trayIcon = new NotifyIcon
@@ -197,6 +203,13 @@ internal sealed class MainForm : Form
                 Launch();
             }
         });
+        menu.Items.Add("Attach to process…", null, (_, _) =>
+        {
+            Show();
+            WindowState = FormWindowState.Normal;
+            Activate();
+            AttachFromList();
+        });
         menu.Items.Add("Stop job", null, (_, _) => StopJob());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) =>
@@ -240,9 +253,8 @@ internal sealed class MainForm : Form
 
     private void Launch()
     {
-        if (_running is not null)
+        if (!EnsureCanStartJob())
         {
-            MessageBox.Show(this, "A throttled job is already running. Stop it first.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
@@ -253,48 +265,103 @@ internal sealed class MainForm : Form
             return;
         }
 
-        if (!OperatingSystem.IsWindows())
-        {
-            MessageBox.Show(this, "CpuThrottle requires Windows.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return;
-        }
-
-        var options = new ThrottleOptions
-        {
-            CpuPercent = _cpuSlider.Value,
-            AffinityCoreCount = _coresBox.Value > 0 ? (int)_coresBox.Value : null,
-            EfficiencyMode = _efficiencyBox.Checked,
-            Priority = _priorityBox.SelectedIndex switch
-            {
-                0 => ThrottlePriority.Idle,
-                2 => ThrottlePriority.Normal,
-                _ => ThrottlePriority.BelowNormal,
-            },
-            DiskReadBytesPerSecond = KbPerSecToBytes(_diskReadBox.Value),
-            DiskWriteBytesPerSecond = KbPerSecToBytes(_diskWriteBox.Value),
-            NetworkTxBytesPerSecond = KbPerSecToBytes(_networkTxBox.Value),
-            GpuThrottle = _gpuLowBox.Checked ? GpuThrottleMode.LowPriority : GpuThrottleMode.Off,
-        };
-
         try
         {
             var args = string.IsNullOrWhiteSpace(_argsBox.Text) ? null : _argsBox.Text.Trim();
-            _running = ThrottledProcess.Start(exe, args, options);
-            _lastExe = exe;
-            _monitor = new ProcessCpuMonitor(_running.ProcessId);
-            _ = _monitor.SampleCpuPercent();
-            _monitorTimer.Start();
-            _launchButton.Enabled = false;
-            _stopButton.Enabled = true;
-            _statusLabel.Text = $"Running PID {_running.ProcessId} @ cap {_cpuSlider.Value}%";
-            _trayIcon.Text = $"CpuThrottle — PID {_running.ProcessId}";
-            _trayIcon.ShowBalloonTip(2000, "CpuThrottle", $"Started under {_cpuSlider.Value}% CPU cap.", ToolTipIcon.Info);
+            BeginJob(ThrottledProcess.Start(exe, args, BuildOptions()), exe, attached: false);
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, "Launch failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
             CleanupRunning();
         }
+    }
+
+    private void AttachFromList()
+    {
+        if (!EnsureCanStartJob())
+        {
+            return;
+        }
+
+        using var picker = new ProcessPickerForm();
+        if (picker.ShowDialog(this) != DialogResult.OK || picker.SelectedProcessId is not int pid)
+        {
+            return;
+        }
+
+        try
+        {
+            BeginJob(ThrottledProcess.Attach(pid, BuildOptions()), exePath: null, attached: true);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                ProcessListFormatter.DescribeAttachFailure(ex, pid),
+                "Attach failed",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            CleanupRunning();
+        }
+    }
+
+    private bool EnsureCanStartJob()
+    {
+        if (_running is not null)
+        {
+            MessageBox.Show(this, "A throttled job is already running. Stop it first.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return false;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            MessageBox.Show(this, "CpuThrottle requires Windows.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+
+        return true;
+    }
+
+    private ThrottleOptions BuildOptions() => new()
+    {
+        CpuPercent = _cpuSlider.Value,
+        AffinityCoreCount = _coresBox.Value > 0 ? (int)_coresBox.Value : null,
+        EfficiencyMode = _efficiencyBox.Checked,
+        Priority = _priorityBox.SelectedIndex switch
+        {
+            0 => ThrottlePriority.Idle,
+            2 => ThrottlePriority.Normal,
+            _ => ThrottlePriority.BelowNormal,
+        },
+        DiskReadBytesPerSecond = KbPerSecToBytes(_diskReadBox.Value),
+        DiskWriteBytesPerSecond = KbPerSecToBytes(_diskWriteBox.Value),
+        NetworkTxBytesPerSecond = KbPerSecToBytes(_networkTxBox.Value),
+        GpuThrottle = _gpuLowBox.Checked ? GpuThrottleMode.LowPriority : GpuThrottleMode.Off,
+    };
+
+    private void BeginJob(ThrottledProcess process, string? exePath, bool attached)
+    {
+        _running = process;
+        if (!string.IsNullOrWhiteSpace(exePath))
+        {
+            _lastExe = exePath;
+        }
+
+        _monitor = new ProcessCpuMonitor(_running.ProcessId);
+        _ = _monitor.SampleCpuPercent();
+        _monitorTimer.Start();
+        _launchButton.Enabled = false;
+        _attachButton.Enabled = false;
+        _stopButton.Enabled = true;
+        var verb = attached ? "Attached" : "Running";
+        _statusLabel.Text = $"{verb} PID {_running.ProcessId} @ cap {_cpuSlider.Value}%";
+        _trayIcon.Text = $"CpuThrottle — PID {_running.ProcessId}";
+        _trayIcon.ShowBalloonTip(
+            2000,
+            "CpuThrottle",
+            $"{verb} under {_cpuSlider.Value}% CPU cap.",
+            ToolTipIcon.Info);
     }
 
     private static long? KbPerSecToBytes(decimal kbPerSec)
@@ -363,6 +430,7 @@ internal sealed class MainForm : Form
         _running?.Dispose();
         _running = null;
         _launchButton.Enabled = true;
+        _attachButton.Enabled = true;
         _stopButton.Enabled = false;
         _trayIcon.Text = "CpuThrottle";
     }
