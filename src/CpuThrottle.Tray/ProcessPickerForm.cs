@@ -25,7 +25,7 @@ internal sealed class ProcessPickerForm : Form
 
     public ProcessPickerForm()
     {
-        Text = "Running processes";
+        Text = "Pick a process to throttle";
         Width = 820;
         Height = 520;
         MinimumSize = new Size(640, 400);
