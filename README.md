@@ -82,6 +82,12 @@ Useful flags:
 - `--wait` / `--no-wait` — wait for exit (default) or keep job alive until Ctrl+C
 - `--attach` / `-a` — throttle an existing PID
 
+## Diagnostic logs
+
+Tray and CLI write a best-effort log under **`%APPDATA%\Minerva\Minerva.log`** (folder created automatically). Entries cover startup (version/PID), launch/attach attempts with options (CPU%, cores, priority, EcoQoS, disk, network Tx, GPU), success/failure of job assignment and native APIs, stop/dispose (including kill-on-job-close), and occasional CPU samples while a job is active.
+
+When diagnosing a crash or “settings didn’t apply” report, send that `Minerva.log` file (or the rolled `Minerva.log.1` if present). Logging never crashes the app if the write fails.
+
 ## Tray UI
 
 Run `CpuThrottle.exe` from the tray publish folder (rebuild after pulling — older builds lack the process list).

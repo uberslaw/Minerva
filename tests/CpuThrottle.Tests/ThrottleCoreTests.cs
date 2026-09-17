@@ -141,6 +141,89 @@ public class BandwidthParserTests
     }
 }
 
+public class MinervaLogTests
+{
+    [Fact]
+    public void Info_WritesToOverrideDirectory_WithoutThrowing()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "MinervaLogTests-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            MinervaLog.SetDirectoryOverride(dir);
+            MinervaLog.EnsureStarted("unit-test");
+            MinervaLog.Info("hello from test");
+            MinervaLog.Warn("warn line");
+            MinervaLog.Error("error line", new InvalidOperationException("boom"));
+
+            var path = MinervaLog.LogFilePath;
+            Assert.True(File.Exists(path), $"Expected log at {path}");
+            var text = File.ReadAllText(path);
+            Assert.Contains("Start unit-test", text, StringComparison.Ordinal);
+            Assert.Contains("hello from test", text, StringComparison.Ordinal);
+            Assert.Contains("warn line", text, StringComparison.Ordinal);
+            Assert.Contains("boom", text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            MinervaLog.SetDirectoryOverride(null);
+            try
+            {
+                if (Directory.Exists(dir))
+                {
+                    Directory.Delete(dir, recursive: true);
+                }
+            }
+            catch
+            {
+                // Best-effort cleanup.
+            }
+        }
+    }
+
+    [Fact]
+    public void FormatOptions_IncludesKeyLimits()
+    {
+        var options = new ThrottleOptions
+        {
+            CpuPercent = 35,
+            AffinityCoreCount = 4,
+            EfficiencyMode = true,
+            Priority = ThrottlePriority.BelowNormal,
+            DiskReadBytesPerSecond = 10 * 1024 * 1024,
+            NetworkTxBytesPerSecond = 5 * 1024 * 1024,
+            GpuThrottle = GpuThrottleMode.Idle,
+        };
+
+        var text = MinervaLog.FormatOptions(options);
+        Assert.Contains("cpu=35%", text, StringComparison.Ordinal);
+        Assert.Contains("cores=4", text, StringComparison.Ordinal);
+        Assert.Contains("ecoqos=on", text, StringComparison.Ordinal);
+        Assert.Contains("gpu=Idle", text, StringComparison.Ordinal);
+        Assert.Contains("diskRead=", text, StringComparison.Ordinal);
+        Assert.Contains("netTx=", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Info_DoesNotThrow_WhenDirectoryUnwritable()
+    {
+        // Point at a path that cannot be created as a directory on most systems.
+        MinervaLog.SetDirectoryOverride(
+            OperatingSystem.IsWindows()
+                ? "Z:\\Minerva\\definitely-missing-volume\\logs"
+                : "/proc/minerva-log-should-fail");
+        try
+        {
+            MinervaLog.EnsureStarted("unit-test-unwritable");
+            MinervaLog.Info("should not throw");
+            MinervaLog.Error("should not throw", new Exception("x"));
+        }
+        finally
+        {
+            MinervaLog.SetDirectoryOverride(null);
+        }
+    }
+}
+
 public class AffinityMaskTests
 {
     [Fact]

@@ -70,16 +70,21 @@ public sealed class ThrottledProcess : IDisposable
 
         var fullPath = ResolveExecutable(fileName);
         var commandLine = BuildCommandLine(fullPath, arguments);
+        MinervaLog.Info($"Launch attempt path='{fullPath}' args='{arguments ?? ""}' | {MinervaLog.FormatOptions(options)}");
 
         var job = NativeMethods.CreateJobObjectW(IntPtr.Zero, null);
         if (job == IntPtr.Zero)
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObject failed.");
+            var err = Marshal.GetLastWin32Error();
+            var ex = new Win32Exception(err, "CreateJobObject failed.");
+            MinervaLog.Error("Launch failed: CreateJobObject", ex);
+            throw ex;
         }
 
         try
         {
             ConfigureJob(job, options);
+            MinervaLog.Info("Job created; CPU/affinity/I/O/net limits applied (KillOnJobClose=on).");
 
             var startup = new NativeMethods.STARTUPINFO { cb = Marshal.SizeOf<NativeMethods.STARTUPINFO>() };
             var creationFlags = NativeMethods.CREATE_SUSPENDED | NativeMethods.CREATE_UNICODE_ENVIRONMENT;
@@ -96,24 +101,31 @@ public sealed class ThrottledProcess : IDisposable
                     ref startup,
                     out var pi))
             {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), $"CreateProcess failed for '{fullPath}'.");
+                var ex = new Win32Exception(Marshal.GetLastWin32Error(), $"CreateProcess failed for '{fullPath}'.");
+                MinervaLog.Error("Launch failed: CreateProcess", ex);
+                throw ex;
             }
 
             try
             {
                 if (!NativeMethods.AssignProcessToJobObject(job, pi.hProcess))
                 {
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject failed.");
+                    var ex = new Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject failed.");
+                    MinervaLog.Error($"Launch failed: AssignProcessToJobObject (pid={pi.dwProcessId})", ex);
+                    throw ex;
                 }
 
                 ApplyProcessPolicies(pi.hProcess, options);
 
                 if (NativeMethods.ResumeThread(pi.hThread) == unchecked((uint)-1))
                 {
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "ResumeThread failed.");
+                    var ex = new Win32Exception(Marshal.GetLastWin32Error(), "ResumeThread failed.");
+                    MinervaLog.Error($"Launch failed: ResumeThread (pid={pi.dwProcessId})", ex);
+                    throw ex;
                 }
 
                 var throttled = new ThrottledProcess(job, pi.hProcess, pi.hThread, unchecked((int)pi.dwProcessId), options);
+                MinervaLog.Info($"Launch success pid={throttled.ProcessId} | applied: {MinervaLog.FormatOptions(options)}");
                 // Ownership transferred.
                 job = IntPtr.Zero;
                 pi.hProcess = IntPtr.Zero;
@@ -132,6 +144,11 @@ public sealed class ThrottledProcess : IDisposable
                     NativeMethods.CloseHandle(pi.hProcess);
                 }
             }
+        }
+        catch (Exception ex) when (ex is not Win32Exception and not PlatformNotSupportedException and not ArgumentException)
+        {
+            MinervaLog.Error("Launch failed", ex);
+            throw;
         }
         finally
         {
@@ -156,6 +173,8 @@ public sealed class ThrottledProcess : IDisposable
             throw new PlatformNotSupportedException("Job Object resource throttling requires Windows 8+ / Windows 11.");
         }
 
+        MinervaLog.Info($"Attach attempt pid={processId} | {MinervaLog.FormatOptions(options)}");
+
         var access = NativeMethods.PROCESS_SET_INFORMATION
                      | NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION
                      | NativeMethods.PROCESS_SET_QUOTA
@@ -165,7 +184,9 @@ public sealed class ThrottledProcess : IDisposable
         var process = NativeMethods.OpenProcess(access, false, unchecked((uint)processId));
         if (process == IntPtr.Zero)
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), $"OpenProcess failed for PID {processId}.");
+            var ex = new Win32Exception(Marshal.GetLastWin32Error(), $"OpenProcess failed for PID {processId}.");
+            MinervaLog.Error($"Attach failed: OpenProcess (pid={processId})", ex);
+            throw ex;
         }
 
         var job = NativeMethods.CreateJobObjectW(IntPtr.Zero, null);
@@ -173,26 +194,37 @@ public sealed class ThrottledProcess : IDisposable
         {
             var err = Marshal.GetLastWin32Error();
             NativeMethods.CloseHandle(process);
-            throw new Win32Exception(err, "CreateJobObject failed.");
+            var ex = new Win32Exception(err, "CreateJobObject failed.");
+            MinervaLog.Error($"Attach failed: CreateJobObject (pid={processId})", ex);
+            throw ex;
         }
 
         try
         {
             ConfigureJob(job, options);
+            MinervaLog.Info($"Job created for attach pid={processId}; limits applied (KillOnJobClose=on).");
 
             if (!NativeMethods.AssignProcessToJobObject(job, process))
             {
-                throw new Win32Exception(
+                var ex = new Win32Exception(
                     Marshal.GetLastWin32Error(),
                     "AssignProcessToJobObject failed. The process may already belong to another job.");
+                MinervaLog.Error($"Attach failed: AssignProcessToJobObject (pid={processId})", ex);
+                throw ex;
             }
 
             ApplyProcessPolicies(process, options);
 
             var throttled = new ThrottledProcess(job, process, IntPtr.Zero, processId, options);
+            MinervaLog.Info($"Attach success pid={processId} | applied: {MinervaLog.FormatOptions(options)}");
             job = IntPtr.Zero;
             process = IntPtr.Zero;
             return throttled;
+        }
+        catch (Exception ex) when (ex is not Win32Exception and not PlatformNotSupportedException and not ArgumentException)
+        {
+            MinervaLog.Error($"Attach failed (pid={processId})", ex);
+            throw;
         }
         finally
         {
@@ -219,10 +251,15 @@ public sealed class ThrottledProcess : IDisposable
     public void Terminate(int exitCode = 1)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        MinervaLog.Info($"Terminate job requested for pid={ProcessId} exitCode={exitCode}");
         if (!NativeMethods.TerminateJobObject(_jobHandle, unchecked((uint)exitCode)))
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "TerminateJobObject failed.");
+            var ex = new Win32Exception(Marshal.GetLastWin32Error(), "TerminateJobObject failed.");
+            MinervaLog.Error($"TerminateJobObject failed (pid={ProcessId})", ex);
+            throw ex;
         }
+
+        MinervaLog.Info($"TerminateJobObject succeeded (pid={ProcessId})");
     }
 
     public void Dispose()
@@ -233,6 +270,9 @@ public sealed class ThrottledProcess : IDisposable
         }
 
         _disposed = true;
+        MinervaLog.Info(
+            $"Dispose job handles for pid={ProcessId} (KillOnJobClose=on — closing job may kill remaining members)");
+
         if (_threadHandle != IntPtr.Zero)
         {
             NativeMethods.CloseHandle(_threadHandle);
@@ -296,10 +336,12 @@ public sealed class ThrottledProcess : IDisposable
             }
             catch (Win32Exception ex)
             {
-                throw new Win32Exception(
+                var wrapped = new Win32Exception(
                     ex.NativeErrorCode,
                     "Job Object I/O rate control failed. Disk bandwidth limits require Windows 10+ " +
                     $"and may be unavailable in this session. Underlying error: {ex.Message}");
+                MinervaLog.Error("SetInformationJobObject(IoRateControl) failed", wrapped);
+                throw wrapped;
             }
         }
 
@@ -320,10 +362,12 @@ public sealed class ThrottledProcess : IDisposable
             }
             catch (Win32Exception ex)
             {
-                throw new Win32Exception(
+                var wrapped = new Win32Exception(
                     ex.NativeErrorCode,
                     "Job Object network rate control failed. Network Tx limits require Windows 10+ " +
                     $"(and typically work for TCP/UDP sockets owned by the job). Underlying error: {ex.Message}");
+                MinervaLog.Error("SetInformationJobObject(NetRateControl) failed", wrapped);
+                throw wrapped;
             }
         }
     }
@@ -340,7 +384,9 @@ public sealed class ThrottledProcess : IDisposable
         if (!NativeMethods.SetPriorityClass(process, priority))
         {
             // Non-fatal: job hard cap still applies.
-            Debug.WriteLine($"SetPriorityClass failed: {Marshal.GetLastWin32Error()}");
+            var err = Marshal.GetLastWin32Error();
+            MinervaLog.Warn($"SetPriorityClass({options.Priority}) failed (Win32 {err}); CPU hard cap still applies.");
+            Debug.WriteLine($"SetPriorityClass failed: {err}");
         }
 
         if (options.EfficiencyMode)
@@ -377,15 +423,22 @@ public sealed class ThrottledProcess : IDisposable
             var status = NativeMethods.D3DKMTSetProcessSchedulingPriorityClass(process, clazz);
             if (status != 0)
             {
+                MinervaLog.Warn($"D3DKMTSetProcessSchedulingPriorityClass({mode}) returned NTSTATUS 0x{status:X8}");
                 Debug.WriteLine($"D3DKMTSetProcessSchedulingPriorityClass({mode}) returned NTSTATUS 0x{status:X8}");
+            }
+            else
+            {
+                MinervaLog.Info($"GPU scheduling hint applied: {mode}");
             }
         }
         catch (DllNotFoundException ex)
         {
+            MinervaLog.Warn($"GPU priority hint unavailable: {ex.Message}");
             Debug.WriteLine($"GPU priority hint unavailable: {ex.Message}");
         }
         catch (EntryPointNotFoundException ex)
         {
+            MinervaLog.Warn($"GPU priority hint unavailable: {ex.Message}");
             Debug.WriteLine($"GPU priority hint unavailable: {ex.Message}");
         }
     }
@@ -410,7 +463,13 @@ public sealed class ThrottledProcess : IDisposable
                     ptr,
                     (uint)size))
             {
-                Debug.WriteLine($"SetProcessInformation(EcoQoS) failed: {Marshal.GetLastWin32Error()}");
+                var err = Marshal.GetLastWin32Error();
+                MinervaLog.Warn($"SetProcessInformation(EcoQoS) failed (Win32 {err}); CPU hard cap still applies.");
+                Debug.WriteLine($"SetProcessInformation(EcoQoS) failed: {err}");
+            }
+            else
+            {
+                MinervaLog.Info("Efficiency Mode (EcoQoS) enabled.");
             }
         }
         finally
@@ -428,7 +487,9 @@ public sealed class ThrottledProcess : IDisposable
             Marshal.StructureToPtr(value, ptr, false);
             if (!NativeMethods.SetInformationJobObject(job, infoClass, ptr, (uint)size))
             {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), $"SetInformationJobObject({infoClass}) failed.");
+                var ex = new Win32Exception(Marshal.GetLastWin32Error(), $"SetInformationJobObject({infoClass}) failed.");
+                MinervaLog.Error($"SetInformationJobObject({infoClass}) failed", ex);
+                throw ex;
             }
         }
         finally

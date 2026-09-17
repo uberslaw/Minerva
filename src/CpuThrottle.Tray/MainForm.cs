@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.Versioning;
+using CpuThrottle;
 
 namespace CpuThrottle.Tray;
 
@@ -42,6 +43,7 @@ internal sealed class MainForm : Form
     private ProcessSortColumn _processSortColumn = ProcessSortColumn.CpuPercent;
     private bool _processSortAscending;
     private bool _processRefreshInFlight;
+    private int _cpuSampleTick;
 
     public MainForm()
     {
@@ -370,10 +372,13 @@ internal sealed class MainForm : Form
         try
         {
             var args = string.IsNullOrWhiteSpace(_argsBox.Text) ? null : _argsBox.Text.Trim();
-            BeginJob(ThrottledProcess.Start(exe, args, BuildOptions()), exe, attached: false);
+            var options = BuildOptions();
+            MinervaLog.Info($"UI Launch clicked path='{exe}' args='{args ?? ""}' | {MinervaLog.FormatOptions(options)}");
+            BeginJob(ThrottledProcess.Start(exe, args, options), exe, attached: false);
         }
         catch (Exception ex)
         {
+            MinervaLog.Error("UI Launch failed", ex);
             MessageBox.Show(this, ex.Message, "Launch failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
             CleanupRunning();
         }
@@ -420,10 +425,13 @@ internal sealed class MainForm : Form
     {
         try
         {
-            BeginJob(ThrottledProcess.Attach(pid, BuildOptions()), exePath: null, attached: true);
+            var options = BuildOptions();
+            MinervaLog.Info($"UI Attach clicked pid={pid} | {MinervaLog.FormatOptions(options)}");
+            BeginJob(ThrottledProcess.Attach(pid, options), exePath: null, attached: true);
         }
         catch (Exception ex)
         {
+            MinervaLog.Error($"UI Attach failed (pid={pid})", ex);
             MessageBox.Show(
                 this,
                 ProcessListFormatter.DescribeAttachFailure(ex, pid),
@@ -471,6 +479,7 @@ internal sealed class MainForm : Form
     private void BeginJob(ThrottledProcess process, string? exePath, bool attached)
     {
         _running = process;
+        _cpuSampleTick = 0;
         if (!string.IsNullOrWhiteSpace(exePath))
         {
             _lastExe = exePath;
@@ -489,6 +498,7 @@ internal sealed class MainForm : Form
             "CpuThrottle",
             $"{verb} under {_cpuSlider.Value}% CPU cap (GPU {gpu}).",
             ToolTipIcon.Info);
+        MinervaLog.Info($"UI {verb} job pid={_running.ProcessId} | {MinervaLog.FormatOptions(_running.Options)} | log={MinervaLog.LogFilePath}");
     }
 
     private static long? KbPerSecToBytes(decimal kbPerSec)
@@ -508,17 +518,21 @@ internal sealed class MainForm : Form
             return;
         }
 
+        var pid = _running.ProcessId;
+        MinervaLog.Info($"UI Stop job clicked pid={pid}");
         try
         {
             _running.Terminate();
         }
         catch (Win32Exception ex)
         {
+            MinervaLog.Error($"UI Stop TerminateJobObject failed (pid={pid})", ex);
             Debug.WriteLine(ex);
         }
 
         CleanupRunning();
         _statusLabel.Text = "Job stopped.";
+        MinervaLog.Info($"UI job stopped pid={pid}");
     }
 
     private void RefreshStatus()
@@ -533,17 +547,25 @@ internal sealed class MainForm : Form
             if (_running.HasExited)
             {
                 var code = _running.ExitCode;
+                var pid = _running.ProcessId;
                 CleanupRunning();
                 _statusLabel.Text = $"Exited with code {code}.";
+                MinervaLog.Info($"UI observed exit pid={pid} code={code}");
                 return;
             }
 
             var cpu = _monitor.SampleCpuPercent();
             _statusLabel.Text = $"PID {_running.ProcessId} — ~{cpu:0.0}% CPU (cap {_running.Options.CpuPercent}%)";
             _trayIcon.Text = $"CpuThrottle — {cpu:0.0}% / {_running.Options.CpuPercent}%";
+            _cpuSampleTick++;
+            if (_cpuSampleTick % 10 == 0)
+            {
+                MinervaLog.Info($"CPU sample pid={_running.ProcessId} ~{cpu:0.0}% (cap {_running.Options.CpuPercent}%)");
+            }
         }
-        catch
+        catch (Exception ex)
         {
+            MinervaLog.Warn($"UI status refresh ended monitoring: {ex.Message}");
             CleanupRunning();
             _statusLabel.Text = "Process ended.";
         }

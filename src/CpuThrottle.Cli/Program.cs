@@ -98,6 +98,8 @@ var root = new RootCommand(
 
 root.SetHandler(async (context) =>
 {
+    MinervaLog.EnsureStarted("CpuThrottle.Cli");
+
     var cpu = context.ParseResult.GetValueForOption(cpuOption);
     var cores = context.ParseResult.GetValueForOption(coresOption);
     var efficiency = context.ParseResult.GetValueForOption(efficiencyOption);
@@ -127,6 +129,7 @@ root.SetHandler(async (context) =>
     if (!OperatingSystem.IsWindows())
     {
         Console.Error.WriteLine("CpuThrottle requires Windows 8+ (Job Object rate control). This host is not Windows.");
+        MinervaLog.Error("Refusing to run: host is not Windows.");
         context.ExitCode = 2;
         return;
     }
@@ -147,6 +150,7 @@ root.SetHandler(async (context) =>
     catch (Exception ex) when (ex is ArgumentException or FormatException or OverflowException)
     {
         Console.Error.WriteLine(ex.Message);
+        MinervaLog.Error("Invalid CLI options", ex);
         context.ExitCode = 2;
         return;
     }
@@ -171,6 +175,7 @@ root.SetHandler(async (context) =>
     catch (ArgumentOutOfRangeException ex)
     {
         Console.Error.WriteLine(ex.Message);
+        MinervaLog.Error("ThrottleOptions validation failed", ex);
         context.ExitCode = 2;
         return;
     }
@@ -178,6 +183,7 @@ root.SetHandler(async (context) =>
     if (attachPid is null && string.IsNullOrWhiteSpace(executable))
     {
         Console.Error.WriteLine("Provide an executable to launch, or --attach <pid>.");
+        MinervaLog.Warn("No executable or --attach provided.");
         context.ExitCode = 2;
         return;
     }
@@ -185,6 +191,7 @@ root.SetHandler(async (context) =>
     if (attachPid is not null && !string.IsNullOrWhiteSpace(executable))
     {
         Console.Error.WriteLine("Use either an executable or --attach, not both.");
+        MinervaLog.Warn("Both executable and --attach provided.");
         context.ExitCode = 2;
         return;
     }
@@ -199,6 +206,7 @@ root.SetHandler(async (context) =>
     catch (Exception ex)
     {
         Console.Error.WriteLine(ex.Message);
+        MinervaLog.Error("CLI run failed", ex);
         context.ExitCode = 1;
     }
 
@@ -215,12 +223,14 @@ static int RunWindows(int? attachPid, string? executable, string[] args, Throttl
     if (attachPid is int pid)
     {
         Console.WriteLine($"Attaching PID {pid} with {DescribeLimits(options)}...");
+        MinervaLog.Info($"CLI attach requested pid={pid} | {MinervaLog.FormatOptions(options)}");
         process = ThrottledProcess.Attach(pid, options);
     }
     else
     {
         var argString = string.Join(' ', args.Select(QuoteIfNeeded));
         Console.WriteLine($"Launching '{executable}' with {DescribeLimits(options)}...");
+        MinervaLog.Info($"CLI launch requested path='{executable}' args='{argString}' | {MinervaLog.FormatOptions(options)}");
         process = ThrottledProcess.Start(executable!, string.IsNullOrEmpty(argString) ? null : argString, options);
     }
 #pragma warning restore CA1416
@@ -230,15 +240,18 @@ static int RunWindows(int? attachPid, string? executable, string[] args, Throttl
         Console.WriteLine(
             $"PID {process.ProcessId} is under job control " +
             $"(efficiency={(options.EfficiencyMode ? "on" : "off")}, priority={options.Priority}, gpu={options.GpuThrottle}).");
+        Console.WriteLine($"Diagnostic log: {MinervaLog.LogFilePath}");
 
         if (!wait)
         {
             Console.WriteLine("Detaching: keep this process alive to retain the job, or the job will close.");
+            MinervaLog.Info($"CLI --no-wait: holding job open for pid={process.ProcessId} until Ctrl+C");
             // Keep the job handle alive by parking until Ctrl+C when not waiting on child alone.
             var exit = new ManualResetEventSlim(false);
             Console.CancelKeyPress += (_, e) =>
             {
                 e.Cancel = true;
+                MinervaLog.Info("CLI Ctrl+C — releasing job");
                 exit.Set();
             };
             exit.Wait();
@@ -247,15 +260,23 @@ static int RunWindows(int? attachPid, string? executable, string[] args, Throttl
 
         using var monitor = new ProcessCpuMonitor(process.ProcessId);
         _ = monitor.SampleCpuPercent();
+        var sampleTicks = 0;
 
         while (!process.WaitForExit(1000))
         {
             var procCpu = monitor.SampleCpuPercent();
             Console.WriteLine($"  process CPU ~{procCpu:0.0}% of machine (cap {options.CpuPercent}%)");
+            sampleTicks++;
+            // Log roughly every 10 seconds to avoid spam.
+            if (sampleTicks % 10 == 0)
+            {
+                MinervaLog.Info($"CPU sample pid={process.ProcessId} ~{procCpu:0.0}% (cap {options.CpuPercent}%)");
+            }
         }
 
         var code = process.ExitCode;
         Console.WriteLine($"Process exited with code {code}.");
+        MinervaLog.Info($"CLI child exited pid={process.ProcessId} code={code}");
         return code;
     }
 }
